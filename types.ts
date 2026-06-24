@@ -12,6 +12,9 @@ export interface RouteData {
   isSplit?: boolean;
   parentId?: string;
   isHold?: boolean;
+  isDriverOff?: boolean;
+  capacityStatus?: 'ok' | 'warn' | 'split-recommended';
+  capacityExcess?: number;
 }
 
 export interface AgencyGroup {
@@ -223,36 +226,65 @@ export const ZONE_NAMES: Record<string, string> = {
   '33055-4': 'M-M-R-E',
 };
 
+export interface DriverRegistryEntry {
+  name: string;
+  group: string;
+  maxCapacity?: number;
+}
+
 export interface DriverRegistry {
-  [id: string]: { name: string; group: string };
+  [id: string]: DriverRegistryEntry;
 }
 
 export const ALLOWED_TIME_SLOTS = ['06:00 AM', '07:00 AM', '08:00 AM'];
 
-export const INITIAL_DRIVER_REGISTRY: DriverRegistry = {
-  // Company / Individual
-  '19492': { name: 'Fath', group: 'Company' },
-  '4574': { name: 'Sijiang', group: 'Company' },
-  '12699': { name: 'Shebani', group: 'Company' },
-  '5528': { name: 'Ben', group: 'Company' },
-  '6725': { name: 'Nabil', group: 'Company' },
-  '13952': { name: 'Hamal', group: 'Company' },
-  '6087': { name: 'Jama', group: 'Company' },
-  '13951': { name: 'Wesam', group: 'Company' },
-  '5267': { name: 'Julio', group: 'Company' },
-  '2566': { name: 'Chong', group: 'Company' },
-  '18843': { name: 'Saiki', group: 'Company' },
-  '16864': { name: 'Pio', group: 'Company' },
-  '6752': { name: 'Liban', group: 'Company' },
-  '5847': { name: 'Amin Abdi', group: 'Company' },
-  '4030': { name: 'Hadi', group: 'Company' },
-  '13955': { name: 'Barkhad', group: 'Company' },
-  '3261': { name: 'Sam', group: 'Company' },
-  '3978': { name: 'Saleh', group: 'Company' },
-  '2218': { name: 'Abdikader', group: 'Company' },
-  '18844': { name: 'Ismail', group: 'Company' },
-  '6074': { name: 'Yousouf', group: 'Company' },
-  '13454': { name: 'Tajouri', group: 'Company' },
+export const DRIVER_MAX_CAPACITIES: Record<string, number> = {
+  '19492': 300,
+  '4574':  300,
+  '3261':  280,
+  '13951': 300,
+  '13454': 300,
+  '5528':  230,
+  '6725':  150,
+  '12699': 250,
+  '12572': 250,
+  '6074':  300,
+  '5267':  200,
+  '18844': 250,
+  '2566':  300,
+  '18843': 300,
+  '16864': 200,
+  '6752':  300,
+  '5847':  250,
+  '3978':  300,
+  '4030':  220,
+};
+
+function buildInitialRegistry(): DriverRegistry {
+  const base: DriverRegistry = {
+    // Company / Individual
+    '19492': { name: 'Fath', group: 'Company' },
+    '4574': { name: 'Sijiang', group: 'Company' },
+    '12699': { name: 'Shebani', group: 'Company' },
+    '5528': { name: 'Ben', group: 'Company' },
+    '6725': { name: 'Nabil', group: 'Company' },
+    '13952': { name: 'Hamal', group: 'Company' },
+    '6087': { name: 'Jama', group: 'Company' },
+    '13951': { name: 'Wesam', group: 'Company' },
+    '5267': { name: 'Julio', group: 'Company' },
+    '2566': { name: 'Chong', group: 'Company' },
+    '18843': { name: 'Saiki', group: 'Company' },
+    '16864': { name: 'Pio', group: 'Company' },
+    '6752': { name: 'Liban', group: 'Company' },
+    '5847': { name: 'Amin Abdi', group: 'Company' },
+    '4030': { name: 'Hadi', group: 'Company' },
+    '13955': { name: 'Barkhad', group: 'Company' },
+    '3261': { name: 'Sam', group: 'Company' },
+    '3978': { name: 'Saleh', group: 'Company' },
+    '2218': { name: 'Abdikader', group: 'Company' },
+    '18844': { name: 'Ismail', group: 'Company' },
+    '6074': { name: 'Yousouf', group: 'Company' },
+    '13454': { name: 'Tajouri', group: 'Company' },
   // Alain
   '18944': { name: 'Alain Team', group: 'Alain' },
   '19015': { name: 'Alain Team', group: 'Alain' },
@@ -345,7 +377,14 @@ export const INITIAL_DRIVER_REGISTRY: DriverRegistry = {
   '19893': { name: 'Chris Team', group: 'Chris' },
   '30913': { name: 'Chris Team', group: 'Chris' },
   '23613': { name: 'Chris Team', group: 'Chris' },
-};
+  };
+  for (const [id, cap] of Object.entries(DRIVER_MAX_CAPACITIES)) {
+    if (base[id]) base[id] = { ...base[id], maxCapacity: cap };
+  }
+  return base;
+}
+
+export const INITIAL_DRIVER_REGISTRY: DriverRegistry = buildInitialRegistry();
 
 export const PLACEHOLDER_MAPPING: Record<string, string> = {
   // 33011 placeholders
@@ -487,4 +526,38 @@ export function getOttawaTodayDateString(): string {
     const year = d.getFullYear();
     return `${month}/${day}/${year}`;
   }
+}
+
+// E-Binder types and helpers
+
+export interface EbinderDriverRow {
+  driverId: string;
+  driverName: string;
+  maxCapacity: number | null;
+  offDates: string[];
+}
+
+export interface EbinderData {
+  weekDates: string[];
+  drivers: EbinderDriverRow[];
+  parsedAt: number;
+}
+
+export function ebinderDateMatchesBatchDate(ebDate: string, batchDate: string): boolean {
+  const normalized = ebDate.replace('.', '-');
+  const parts = normalized.split('-');
+  const m = parseInt(parts[0]);
+  const d = parseInt(parts[1]);
+  const bParts = batchDate.split('/');
+  return m === parseInt(bParts[0]) && d === parseInt(bParts[1]);
+}
+
+export function getOffDriverIds(ebinder: EbinderData, batchDate: string): Set<string> {
+  const offSet = new Set<string>();
+  for (const d of ebinder.drivers) {
+    if (d.offDates.some(od => ebinderDateMatchesBatchDate(od, batchDate))) {
+      offSet.add(d.driverId);
+    }
+  }
+  return offSet;
 }

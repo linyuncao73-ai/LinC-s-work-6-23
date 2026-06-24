@@ -2,7 +2,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { parseExcelFile } from './services/excelParser';
 import { parseImageFile } from './services/geminiParser';
-import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTodayDateString } from './types';
+import { parseEbinderImage } from './services/ebinderParser';
+import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTodayDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import html2canvas from 'html2canvas';
 
 /**
@@ -34,12 +35,20 @@ const getAgencyColor = (group: string) => {
   }
 };
 
-const SplitModal: React.FC<{ 
-  route: RouteData; 
-  onClose: () => void; 
-  onConfirm: (firstVolume: number) => void 
+const SplitModal: React.FC<{
+  route: RouteData;
+  onClose: () => void;
+  onConfirm: (firstVolume: number) => void
 }> = ({ route, onClose, onConfirm }) => {
-  const [splitVal, setSplitVal] = useState<number>(Math.floor(route.orderVolume / 2));
+  const isCapacitySplit = route.capacityStatus === 'split-recommended' && (route.capacityExcess ?? 0) > 0;
+  const smartDefault = Math.min(
+    route.orderVolume - 1,
+    Math.max(1, isCapacitySplit
+      ? route.orderVolume - (route.capacityExcess ?? 0)
+      : Math.floor(route.orderVolume / 2)
+    )
+  );
+  const [splitVal, setSplitVal] = useState<number>(smartDefault);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
@@ -50,6 +59,13 @@ const SplitModal: React.FC<{
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Route {route.routeNum}</p>
         </div>
         <div className="p-8 space-y-6">
+          {isCapacitySplit && (
+            <div className="bg-orange-50 border border-orange-100 rounded-2xl px-5 py-4">
+              <p className="text-[10px] font-black text-orange-600 uppercase tracking-wider mb-1">Capacity Split Recommended</p>
+              <p className="text-xs text-orange-500">Driver is over capacity by <span className="font-black">{route.capacityExcess}</span> parcels. Pre-filled: driver keeps their max, broker takes the rest.</p>
+            </div>
+          )}
+
           <div className="bg-slate-50 p-6 rounded-2xl flex justify-between items-center">
             <div>
               <p className="text-[10px] font-black text-slate-400 uppercase">Original Total</p>
@@ -61,8 +77,8 @@ const SplitModal: React.FC<{
           </div>
 
           <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Volume for Part 1</label>
-            <input 
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Volume for Part 1 (Driver)</label>
+            <input
               type="number"
               value={splitVal}
               max={route.orderVolume - 1}
@@ -71,12 +87,77 @@ const SplitModal: React.FC<{
               className="w-full bg-slate-50 border-2 border-slate-100 focus:border-orange-500 focus:outline-none rounded-2xl px-6 py-4 text-xl font-black text-orange-600 transition-all"
             />
           </div>
+
+          <div className="grid grid-cols-2 gap-3 text-center">
+            <div className="bg-blue-50 p-3 rounded-xl">
+              <p className="text-[9px] font-black text-blue-400 uppercase">Part 1 (Driver)</p>
+              <p className="text-xl font-black text-blue-700">{splitVal}</p>
+            </div>
+            <div className="bg-slate-50 p-3 rounded-xl">
+              <p className="text-[9px] font-black text-slate-400 uppercase">Part 2 (Broker)</p>
+              <p className="text-xl font-black text-slate-700">{route.orderVolume - splitVal}</p>
+            </div>
+          </div>
         </div>
         <div className="p-8 bg-slate-50 grid grid-cols-2 gap-4">
           <button onClick={onClose} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">Cancel</button>
           <button onClick={() => onConfirm(splitVal)} className="px-6 py-4 rounded-2xl bg-slate-900 text-white font-black text-xs hover:bg-slate-800 transition-all shadow-lg shadow-slate-200">Confirm Split</button>
         </div>
       </div>
+    </div>
+  );
+};
+
+const AvailabilityPanel: React.FC<{
+  ebinderData: EbinderData;
+  offDriverIds: Set<string>;
+  registry: DriverRegistry;
+  batchDate: string;
+  onManualToggle: (driverId: string, setOff: boolean) => void;
+  onClose: () => void;
+}> = ({ ebinderData, offDriverIds, registry, batchDate, onManualToggle, onClose }) => {
+  const companyDrivers = Object.entries(registry).filter(([, d]) => d.group === 'Company');
+  const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
+  const dateInEbinder = ebinderData.weekDates.some(wd => {
+    const [m, d] = wd.replace('.', '-').split('-').map(Number);
+    const bParts = batchDate.split('/');
+    return m === parseInt(bParts[0]) && d === parseInt(bParts[1]);
+  });
+  const parsedAgo = Math.round((Date.now() - ebinderData.parsedAt) / 60000);
+
+  return (
+    <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-6">
+      <div className="flex justify-between items-start mb-4">
+        <div>
+          <h3 className="font-black text-slate-800 text-sm uppercase tracking-wider">Driver Availability</h3>
+          <p className="text-[10px] text-slate-400 mt-0.5">For {batchDate} · Parsed {parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {!dateInEbinder && (
+            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200">No data for today's date</span>
+          )}
+          <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
+          <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {companyDrivers.map(([id, driver]) => {
+          const isOff = offDriverIds.has(id);
+          const maxCap = driver.maxCapacity ?? DRIVER_MAX_CAPACITIES[id];
+          return (
+            <button
+              key={id}
+              onClick={() => onManualToggle(id, !isOff)}
+              title={`Click to toggle · Max: ${maxCap ?? 'No limit'}`}
+              className={`flex flex-col items-center px-3 py-2 rounded-xl border text-left transition-all ${isOff ? 'bg-amber-50 border-amber-200 opacity-70' : 'bg-emerald-50 border-emerald-200 hover:border-emerald-400'}`}
+            >
+              <span className={`text-[10px] font-black ${isOff ? 'text-amber-700 line-through' : 'text-emerald-800'}`}>{driver.name}</span>
+              <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[9px] text-slate-400 mt-3">Click a driver to manually toggle. Run Auto-Assign to apply changes.</p>
     </div>
   );
 };
@@ -511,14 +592,15 @@ const AllocationSummaryView: React.FC<{ routes: RouteData[] }> = ({ routes }) =>
   );
 };
 
-const MainEditor: React.FC<{ 
-    routes: RouteData[], 
+const MainEditor: React.FC<{
+    routes: RouteData[],
     registry: DriverRegistry,
+    offDriverIds: Set<string>,
     onUpdate: (id: string, updates: Partial<RouteData>) => void,
     onAddRow: () => void,
     onDeleteRow: (id: string) => void,
     onOpenSplit: (route: RouteData) => void
-}> = ({ routes, registry, onUpdate, onAddRow, onDeleteRow, onOpenSplit }) => {
+}> = ({ routes, registry, offDriverIds, onUpdate, onAddRow, onDeleteRow, onOpenSplit }) => {
     const sortedRoutes = useMemo(() => [...routes].sort((a, b) => compareRouteNums(a.routeNum, b.routeNum)), [routes]);
 
     return (
@@ -550,21 +632,38 @@ const MainEditor: React.FC<{
                         {sortedRoutes.map(route => {
                             const baseRoutePart = route.routeNum.split('-')[0];
                             const showHoldBtn = ['33045', '33050', '33055'].includes(baseRoutePart);
+                            const isOff = route.isDriverOff || (route.driverId ? offDriverIds.has(route.driverId) : false);
+                            const rowBg = route.isHold
+                              ? 'bg-rose-50/40'
+                              : isOff
+                              ? 'bg-amber-50/60'
+                              : route.capacityStatus === 'split-recommended'
+                              ? 'bg-orange-50/50'
+                              : route.capacityStatus === 'warn'
+                              ? 'bg-yellow-50/40'
+                              : '';
                             return (
-                                <tr key={route.id} className={`hover:bg-slate-50/50 transition-all group ${route.isHold ? 'bg-rose-50/40' : ''}`}>
+                                <tr key={route.id} className={`hover:bg-slate-50/50 transition-all group ${rowBg}`}>
                                     <td className="px-6 py-4">
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             <input value={route.routeNum} onChange={e => onUpdate(route.id, { routeNum: e.target.value })} className={`w-32 bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none font-bold ${route.isHold ? 'text-red-600 line-through' : 'text-orange-600'}`} />
                                             {route.isHold && <span className="bg-red-100 text-red-800 text-[8px] font-black px-1.5 py-0.5 rounded border border-red-200 uppercase tracking-wider">HOLD</span>}
+                                            {isOff && <span className="bg-amber-100 text-amber-800 text-[8px] font-black px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider">Driver Off</span>}
+                                            {!isOff && route.capacityStatus === 'split-recommended' && (
+                                              <span className="bg-orange-100 text-orange-700 text-[8px] font-black px-1.5 py-0.5 rounded border border-orange-200 uppercase tracking-wider" title={`Over by ${route.capacityExcess} parcels`}>Split</span>
+                                            )}
+                                            {!isOff && route.capacityStatus === 'warn' && (
+                                              <span className="bg-yellow-100 text-yellow-700 text-[8px] font-black px-1.5 py-0.5 rounded border border-yellow-200 uppercase tracking-wider" title={`Over by ${route.capacityExcess} parcels`}>Over Cap</span>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
                                         <input value={route.routeLocation || ''} onChange={e => onUpdate(route.id, { routeLocation: e.target.value })} className="w-40 bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none font-bold text-slate-800 placeholder:text-slate-300" placeholder="Location" />
                                     </td>
                                     <td className="px-6 py-4">
-                                        <select 
-                                            value={route.timeSlot || ''} 
-                                            onChange={e => onUpdate(route.id, { timeSlot: e.target.value })} 
+                                        <select
+                                            value={route.timeSlot || ''}
+                                            onChange={e => onUpdate(route.id, { timeSlot: e.target.value })}
                                             className="w-28 bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none font-bold text-blue-600 appearance-none cursor-pointer"
                                         >
                                             <option value="" disabled>Select Time</option>
@@ -587,19 +686,28 @@ const MainEditor: React.FC<{
                                         <input value={route.driverName || ''} onChange={e => onUpdate(route.id, { driverName: e.target.value, driver: e.target.value })} className="w-full font-bold text-slate-800 border-b border-transparent focus:border-orange-400 focus:outline-none" placeholder="Name" />
                                     </td>
                                     <td className="px-6 py-4 text-center">
-                                        <input type="number" value={route.orderVolume} onChange={e => onUpdate(route.id, { orderVolume: parseInt(e.target.value) || 0 })} className="w-16 text-center border-b border-transparent focus:border-orange-400 focus:outline-none font-black" />
+                                        <input type="number" value={route.orderVolume} onChange={e => onUpdate(route.id, { orderVolume: parseInt(e.target.value) || 0 })} className={`w-16 text-center border-b border-transparent focus:border-orange-400 focus:outline-none font-black ${route.capacityStatus === 'split-recommended' ? 'text-orange-600' : route.capacityStatus === 'warn' ? 'text-yellow-600' : ''}`} />
+                                        {(route.capacityExcess ?? 0) > 0 && (
+                                          <div className="text-[9px] text-orange-500 font-bold mt-0.5">+{route.capacityExcess} over</div>
+                                        )}
                                     </td>
                                     <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
                                         {showHoldBtn && (
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); onUpdate(route.id, { isHold: !route.isHold }); }} 
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onUpdate(route.id, { isHold: !route.isHold }); }}
                                                 className={`p-2 transition-all shadow-sm rounded-lg ${route.isHold ? 'text-red-600 bg-red-100/50 hover:bg-red-100' : 'text-slate-300 hover:text-red-500'}`}
                                                 title={route.isHold ? "Unhold Route" : "Hold Route"}
                                             >
                                                 <i className="fa-solid fa-hand"></i>
                                             </button>
                                         )}
-                                        <button onClick={(e) => { e.stopPropagation(); onOpenSplit(route); }} className="p-2 text-slate-300 hover:text-orange-600 transition-all shadow-sm"><i className="fa-solid fa-scissors"></i></button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); onOpenSplit(route); }}
+                                          className={`p-2 transition-all shadow-sm rounded-lg ${route.capacityStatus === 'split-recommended' ? 'text-orange-500 bg-orange-50 hover:bg-orange-100 animate-pulse' : 'text-slate-300 hover:text-orange-600'}`}
+                                          title={route.capacityStatus === 'split-recommended' ? `Split recommended: over by ${route.capacityExcess} parcels` : 'Split Route'}
+                                        >
+                                          <i className="fa-solid fa-scissors"></i>
+                                        </button>
                                         <button onClick={(e) => { e.stopPropagation(); onDeleteRow(route.id); }} className="p-2 text-slate-300 hover:text-red-500 transition-all shadow-sm"><i className="fa-solid fa-trash-can"></i></button>
                                     </td>
                                 </tr>
@@ -741,6 +849,24 @@ const App: React.FC = () => {
   });
   const [splittingRoute, setSplittingRoute] = useState<RouteData | null>(null);
 
+  const [ebinderData, setEbinderData] = useState<EbinderData | null>(() => {
+    const saved = localStorage.getItem('yow_dispatch_ebinder');
+    try { return saved ? JSON.parse(saved) : null; } catch { return null; }
+  });
+  const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>({});
+  const [ebinderLoading, setEbinderLoading] = useState(false);
+  const [showAvailabilityPanel, setShowAvailabilityPanel] = useState(false);
+  const ebinderInputRef = useRef<HTMLInputElement>(null);
+
+  const offDriverIdsFinal = useMemo<Set<string>>(() => {
+    const base = ebinderData ? getOffDriverIds(ebinderData, batchInfo.date) : new Set<string>();
+    const result = new Set(base);
+    for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
+      if (isOff) result.add(id); else result.delete(id);
+    }
+    return result;
+  }, [ebinderData, batchInfo.date, ebinderManualOverrides]);
+
   useEffect(() => {
     localStorage.setItem('yow_dispatch_routes', JSON.stringify(routes));
     if (routes.length > 0 && !hasStarted) setHasStarted(true);
@@ -748,6 +874,31 @@ const App: React.FC = () => {
 
   useEffect(() => localStorage.setItem('yow_dispatch_batch', JSON.stringify(batchInfo)), [batchInfo]);
   useEffect(() => localStorage.setItem('yow_dispatch_registry', JSON.stringify(registry)), [registry]);
+  useEffect(() => { if (ebinderData) localStorage.setItem('yow_dispatch_ebinder', JSON.stringify(ebinderData)); }, [ebinderData]);
+
+  const handleEbinderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setEbinderLoading(true);
+    try {
+      const data = await parseEbinderImage(file);
+      setRegistry(prev => {
+        const updated = { ...prev };
+        for (const d of data.drivers) {
+          if (updated[d.driverId] && d.maxCapacity !== null) {
+            updated[d.driverId] = { ...updated[d.driverId], maxCapacity: d.maxCapacity };
+          }
+        }
+        return updated;
+      });
+      setEbinderData(data);
+      setShowAvailabilityPanel(true);
+    } catch (err: any) { alert(`E-binder parse error: ${err.message}`); }
+    finally { setEbinderLoading(false); e.target.value = ''; }
+  };
+
+  const handleManualToggle = (driverId: string, setOff: boolean) => {
+    setEbinderManualOverrides(prev => ({ ...prev, [driverId]: setOff }));
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -779,30 +930,51 @@ const App: React.FC = () => {
     const todayOttawa = getOttawaTodayDateString();
     setBatchInfo(prev => ({ ...prev, date: todayOttawa }));
 
+    const activeOffIds = ebinderData ? getOffDriverIds(ebinderData, todayOttawa) : new Set<string>();
+    for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
+      if (isOff) activeOffIds.add(id); else activeOffIds.delete(id);
+    }
+
+    const evalCapacity = (driverId: string, volume: number, driverData: DriverRegistry[string] | undefined): Pick<RouteData, 'capacityStatus' | 'capacityExcess'> => {
+      const maxCap = driverData?.maxCapacity ?? DRIVER_MAX_CAPACITIES[driverId];
+      if (maxCap === undefined) return { capacityStatus: undefined, capacityExcess: 0 };
+      const excess = volume - maxCap;
+      const capacityExcess = Math.max(0, excess);
+      let capacityStatus: RouteData['capacityStatus'];
+      if (excess <= 20) capacityStatus = 'ok';
+      else if (excess < 100) capacityStatus = 'warn';
+      else if (maxCap >= 150) capacityStatus = 'split-recommended';
+      else capacityStatus = 'warn';
+      return { capacityStatus, capacityExcess };
+    };
+
     setRoutes(prev => prev.map(route => {
         const placeholderKey = route.driverId || '';
         const realId = PLACEHOLDER_MAPPING[placeholderKey];
         const parts = placeholderKey.split('-');
-        
-        // Resolve location taking exact routeNum first, then exact placeholderKey, then fallback parts, and keep original as final fallback
-        const newLocation = ZONE_NAMES[route.routeNum] || 
-                            ZONE_NAMES[placeholderKey] || 
-                            (parts.length >= 3 ? ZONE_NAMES[`${parts[0]}-${parts[parts.length - 1]}`] : '') || 
+
+        const newLocation = ZONE_NAMES[route.routeNum] ||
+                            ZONE_NAMES[placeholderKey] ||
+                            (parts.length >= 3 ? ZONE_NAMES[`${parts[0]}-${parts[parts.length - 1]}`] : '') ||
                             route.routeLocation;
-        
+
         const baseRoute = route.routeNum?.split('-')[0] || '';
         const newTime = getDefaultTimeSlot(baseRoute, todayOttawa);
 
         if (realId) {
             const driverData = registry[realId];
-            return { 
-                ...route, 
-                driverId: realId, 
-                driverName: driverData?.name || `Driver ${realId}`, 
-                driverGroup: driverData?.group || 'Unassigned', 
-                driver: driverData?.name || `Driver ${realId}`, 
+            const isOff = activeOffIds.has(realId);
+            const capResult = isOff ? { capacityStatus: undefined as RouteData['capacityStatus'], capacityExcess: 0 } : evalCapacity(realId, route.orderVolume, driverData);
+            return {
+                ...route,
+                driverId: realId,
+                driverName: driverData?.name || `Driver ${realId}`,
+                driverGroup: driverData?.group || 'Unassigned',
+                driver: driverData?.name || `Driver ${realId}`,
                 routeLocation: newLocation,
-                timeSlot: newTime
+                timeSlot: newTime,
+                isDriverOff: isOff,
+                ...capResult,
             };
         }
         return { ...route, routeLocation: newLocation, timeSlot: newTime };
@@ -929,7 +1101,8 @@ const App: React.FC = () => {
         <main className="max-w-7xl mx-auto px-8 mt-10">
             {/* Action Bar (Uploads & Stats) */}
             {!loading && (view !== 'main' || !showLanding) && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6 mb-10">
+              <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-6 mb-6">
                   <div onClick={() => fileInputRef.current?.click()} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-orange-500 hover:shadow-lg transition-all">
                       <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".xlsx,.xls" />
                       <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-500"><i className="fa-solid fa-file-arrow-up"></i></div>
@@ -940,6 +1113,28 @@ const App: React.FC = () => {
                       <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-500"><i className="fa-solid fa-camera"></i></div>
                       <div><p className="text-[10px] font-black uppercase text-slate-400">Screenshot</p><h4 className="font-bold">Import Image</h4></div>
                   </div>
+                  <div
+                    onClick={() => ebinderInputRef.current?.click()}
+                    className={`bg-white p-6 rounded-3xl shadow-sm border flex items-center gap-4 cursor-pointer hover:shadow-lg transition-all ${ebinderData ? 'border-emerald-200 hover:border-emerald-500' : 'border-slate-100 hover:border-emerald-500'}`}
+                  >
+                    <input type="file" ref={ebinderInputRef} onChange={handleEbinderUpload} className="hidden" accept="image/*" />
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${ebinderLoading ? 'bg-emerald-50' : ebinderData ? 'bg-emerald-100' : 'bg-emerald-50'}`}>
+                      {ebinderLoading
+                        ? <i className="fa-solid fa-spinner animate-spin text-emerald-500"></i>
+                        : <i className="fa-solid fa-calendar-check text-emerald-500"></i>
+                      }
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-slate-400">E-Binder</p>
+                      <h4 className="font-bold">{ebinderLoading ? 'Parsing...' : ebinderData ? 'Availability Loaded' : 'Upload Availability'}</h4>
+                      {ebinderData && offDriverIdsFinal.size > 0 && (
+                        <p className="text-[9px] text-amber-600 font-bold mt-0.5">{offDriverIdsFinal.size} off today</p>
+                      )}
+                      {ebinderData && offDriverIdsFinal.size === 0 && (
+                        <p className="text-[9px] text-emerald-600 font-bold mt-0.5">All drivers available</p>
+                      )}
+                    </div>
+                  </div>
                   <div onClick={handleAutoAssign} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-blue-500 hover:shadow-lg transition-all">
                       <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-500"><i className="fa-solid fa-wand-magic-sparkles"></i></div>
                       <div><p className="text-[10px] font-black uppercase text-slate-400">Smart Fix</p><h4 className="font-bold">Auto-Assign</h4></div>
@@ -949,12 +1144,33 @@ const App: React.FC = () => {
                     <h4 className="text-2xl font-black text-slate-800">{routes.reduce((s, r) => s + (Number(r.orderVolume) || 0), 0)}</h4>
                   </div>
                   <div className="lg:col-span-2 bg-white text-slate-800 p-6 rounded-3xl shadow-sm flex flex-col justify-center border border-slate-100">
-                    <div>
-                        <p className="text-[10px] font-black uppercase text-slate-400">Dispatch Settings</p>
-                        <h4 className="text-[10px] font-mono text-orange-600 tracking-tight mt-0.5 truncate">{batchInfo.batchId}</h4>
+                    <div className="flex items-center justify-between">
+                      <div>
+                          <p className="text-[10px] font-black uppercase text-slate-400">Dispatch Settings</p>
+                          <h4 className="text-[10px] font-mono text-orange-600 tracking-tight mt-0.5 truncate">{batchInfo.batchId}</h4>
+                      </div>
+                      {ebinderData && (
+                        <button
+                          onClick={() => setShowAvailabilityPanel(p => !p)}
+                          className={`text-[9px] font-black px-3 py-1.5 rounded-lg transition-all ${showAvailabilityPanel ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          {showAvailabilityPanel ? 'Hide Availability' : 'View Availability'}
+                        </button>
+                      )}
                     </div>
                   </div>
               </div>
+              {showAvailabilityPanel && ebinderData && (
+                <AvailabilityPanel
+                  ebinderData={ebinderData}
+                  offDriverIds={offDriverIdsFinal}
+                  registry={registry}
+                  batchDate={batchInfo.date}
+                  onManualToggle={handleManualToggle}
+                  onClose={() => setShowAvailabilityPanel(false)}
+                />
+              )}
+              </>
             )}
 
             {loading ? (
@@ -990,7 +1206,7 @@ const App: React.FC = () => {
                     ) : (
                       /* Regular Views with Data */
                       <>
-                        {view === 'main' && <MainEditor routes={routes} registry={registry} onUpdate={onUpdateRoute} onDeleteRow={onDeleteRoute} onAddRow={addEmptyRow} onOpenSplit={setSplittingRoute} />}
+                        {view === 'main' && <MainEditor routes={routes} registry={registry} offDriverIds={offDriverIdsFinal} onUpdate={onUpdateRoute} onDeleteRow={onDeleteRoute} onAddRow={addEmptyRow} onOpenSplit={setSplittingRoute} />}
                         {view === 'reports' && <WhatsAppReports groups={groupedData} batchInfo={batchInfo} />}
                         {view === 'allocations' && <AllocationSummaryView routes={routes} />}
                         {view === 'print' && <PrintView routes={routes} batchInfo={batchInfo} />}
