@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
+      base: '/linc-s-work-6-23/',
       server: {
         port: 3000,
         host: '0.0.0.0',
