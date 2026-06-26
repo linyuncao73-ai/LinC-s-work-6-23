@@ -1,0 +1,11 @@
+# Supabase CLI project config.
+# Run `supabase link --project-ref <ref>` to connect to your hosted project.
+
+project_id = "yow-dispatch"
+
+# gemini-parse holds the GEMINI_API_KEY server-side and proxies Vision calls.
+# verify_jwt = true → callers must send a valid JWT (the public anon key that
+# `supabase.functions.invoke` attaches automatically qualifies), so the function
+# isn't an open endpoint to the whole internet.
+[functions.gemini-parse]
+verify_jwt = true
