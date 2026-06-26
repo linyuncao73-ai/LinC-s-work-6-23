@@ -170,20 +170,34 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Missing imageBase64 or mimeType" }, 400);
   }
 
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    const { model, prompt, schema } = OPS[op];
-    const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [{ inlineData: { data: imageBase64, mimeType } }, { text: prompt }],
-      },
-      config: { responseMimeType: "application/json", responseSchema: schema },
-    });
-    // Return the raw structured JSON; all app-specific mapping stays in the frontend.
-    return json(JSON.parse(response.text || "{}"), 200);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return json({ error: `Gemini request failed: ${msg}` }, 502);
+  const ai = new GoogleGenAI({ apiKey });
+  const { model, prompt, schema } = OPS[op];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // Preview models intermittently return 503 UNAVAILABLE ("high demand") or 429
+  // rate limits. Retry transient failures with exponential backoff so the user
+  // doesn't have to re-upload — only give up after a few tries.
+  const TRANSIENT = /(\b503\b|UNAVAILABLE|\b429\b|RESOURCE_EXHAUSTED|overloaded|high demand)/i;
+  const MAX_ATTEMPTS = 4;
+  let lastMsg = "unknown error";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: {
+          parts: [{ inlineData: { data: imageBase64, mimeType } }, { text: prompt }],
+        },
+        config: { responseMimeType: "application/json", responseSchema: schema },
+      });
+      // Return the raw structured JSON; all app-specific mapping stays in the frontend.
+      return json(JSON.parse(response.text || "{}"), 200);
+    } catch (e) {
+      lastMsg = e instanceof Error ? e.message : String(e);
+      if (TRANSIENT.test(lastMsg) && attempt < MAX_ATTEMPTS - 1) {
+        await sleep(700 * Math.pow(2, attempt)); // 0.7s, 1.4s, 2.8s
+        continue;
+      }
+      return json({ error: `Gemini request failed: ${lastMsg}` }, 502);
+    }
   }
+  return json({ error: `Gemini request failed after ${MAX_ATTEMPTS} attempts: ${lastMsg}` }, 502);
 });
