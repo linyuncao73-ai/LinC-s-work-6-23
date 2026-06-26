@@ -82,7 +82,9 @@ const OPS: Record<string, { model: string; prompt: string; schema: unknown }> = 
   },
 
   ebinder: {
-    model: "gemini-2.5-flash-preview",
+    // gemini-2.5-flash-preview was retired (404 NOT_FOUND); use the same
+    // current model as the image op.
+    model: "gemini-3-flash-preview",
     prompt: `
     You are analyzing a weekly driver scheduling spreadsheet called "e-binder".
 
