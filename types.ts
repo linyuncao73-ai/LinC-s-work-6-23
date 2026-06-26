@@ -22,7 +22,7 @@ export interface AgencyGroup {
   routes: RouteData[];
 }
 
-export const AGENCIES = ['Alain', 'Ammar', 'Alawi', 'Kaneza', 'Parfait', 'Massi', 'Chris'];
+export const AGENCIES = ['Alain', 'Alawi', 'Kaneza', 'Parfait', 'Massi', 'Chris'];
 
 export interface BatchInfo {
   date: string;
@@ -211,11 +211,11 @@ export const ZONE_NAMES: Record<string, string> = {
 
   // 33045
   '33045-1': 'Cornwall',
-  '33045-2': 'Brookville',
+  '33045-2': 'V-L-C',
   '33045-3': 'Rockland',
 
   // 33050
-  '33050-1': 'V-L-C',
+  '33050-1': 'Brookville',
   '33050-2': 'Amprior',
   '33050-3': 'Calton Place',
 
@@ -248,6 +248,7 @@ export const DRIVER_MAX_CAPACITIES: Record<string, number> = {
   '6725':  150,
   '12699': 250,
   '12572': 250,
+  '13456': 250,
   '6074':  300,
   '5267':  200,
   '18844': 250,
@@ -301,25 +302,9 @@ function buildInitialRegistry(): DriverRegistry {
   '18940': { name: 'Alain Team', group: 'Alain' },
   '32108': { name: 'Alain Team', group: 'Alain' },
   '18943': { name: 'Alain Team', group: 'Alain' },
-  // Ammar
-  '13456': { name: 'Ammar Team', group: 'Ammar' },
-  '32331': { name: 'Ammar Team', group: 'Ammar' },
-  '32450': { name: 'Ammar Team', group: 'Ammar' },
-  '32623': { name: 'Ammar Team', group: 'Ammar' },
-  '32171': { name: 'Ammar Team', group: 'Ammar' },
-  '32338': { name: 'Ammar Team', group: 'Ammar' },
-  '12572': { name: 'Nada', group: 'Ammar' },
-  '31802': { name: 'Ammar Team', group: 'Ammar' },
-  '32348': { name: 'Ammar Team', group: 'Ammar' },
-  '5000225': { name: 'Ammar Team', group: 'Ammar' },
-  '5000227': { name: 'Ammar Team', group: 'Ammar' },
-  '500808': { name: 'Ammar Team', group: 'Ammar' },
-  '500147': { name: 'Ammar Team', group: 'Ammar' },
-  '32328': { name: 'Ammar Team', group: 'Ammar' },
-  '5001788': { name: 'Ammar Team', group: 'Ammar' },
-  '5000807': { name: 'Ammar Team', group: 'Ammar' },
-  '500427': { name: 'Ammar Team', group: 'Ammar' },
-  '500227': { name: 'Ammar Team', group: 'Ammar' },
+  // Ammar agency dissolved 2026-06 — Ammar (13456) & Nada (12572) are now Company drivers
+  '13456': { name: 'Ammar', group: 'Company' },
+  '12572': { name: 'Nada', group: 'Company' },
   // Alawi
   '15170': { name: 'Alawi Team', group: 'Alawi' },
   '15169': { name: 'Alawi Team', group: 'Alawi' },
@@ -468,8 +453,8 @@ export const PLACEHOLDER_MAPPING: Record<string, string> = {
   '33030-3-1': '6752', '33030-3-2': '5847', '33030-3-3': '28704',
   '33030-4-1': '6752', '33030-4-2': '5847', '33030-4-3': '18944', '33030-4-4': '2218',
   '33034-3-1': '3978', '33034-3-2': '4030', '33034-3-3': '13955',
-  '33045-3-1': '4186', '33045-3-2': '8230', '33045-3-3': '12589',
-  '33050-3-1': '2633', '33050-3-2': '20255', '33050-3-3': '13800',
+  '33045-3-1': '4186', '33045-3-2': '2633', '33045-3-3': '3974',
+  '33050-3-1': '19015', '33050-3-2': '30913', '33050-3-3': '15171',
   '33055-4-1': '20255', '33055-4-2': '15167', '33055-4-3': '18942', '33055-4-4': '18942',
 };
 

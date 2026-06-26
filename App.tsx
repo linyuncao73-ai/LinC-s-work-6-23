@@ -41,10 +41,14 @@ const SplitModal: React.FC<{
   onConfirm: (firstVolume: number) => void
 }> = ({ route, onClose, onConfirm }) => {
   const isCapacitySplit = route.capacityStatus === 'split-recommended' && (route.capacityExcess ?? 0) > 0;
+  // For a company driver over capacity, hand the broker a worthwhile chunk:
+  // at least 100, aiming for ~120 (more if the excess is larger). The driver
+  // keeps the rest. Brokers never hit this branch (they have no capacity cap).
+  const brokerChunk = Math.max(route.capacityExcess ?? 0, 120);
   const smartDefault = Math.min(
     route.orderVolume - 1,
     Math.max(1, isCapacitySplit
-      ? route.orderVolume - (route.capacityExcess ?? 0)
+      ? route.orderVolume - brokerChunk
       : Math.floor(route.orderVolume / 2)
     )
   );
@@ -984,12 +988,21 @@ const App: React.FC = () => {
   const handleSplit = (firstVolume: number) => {
     if (!splittingRoute) return;
     const secondVolume = splittingRoute.orderVolume - firstVolume;
-    const secondPart: RouteData = { ...splittingRoute, id: `split-${splittingRoute.id}-${Date.now()}`, routeNum: splittingRoute.routeNum + '.1', orderVolume: secondVolume, driverId: '', driverName: 'Unassigned', driverGroup: 'Unassigned', driver: 'Unassigned', parentId: splittingRoute.id };
+    // The broker chunk is unassigned — it must not inherit the parent's
+    // over-capacity badge.
+    const secondPart: RouteData = { ...splittingRoute, id: `split-${splittingRoute.id}-${Date.now()}`, routeNum: splittingRoute.routeNum + '.1', orderVolume: secondVolume, driverId: '', driverName: 'Unassigned', driverGroup: 'Unassigned', driver: 'Unassigned', parentId: splittingRoute.id, capacityStatus: undefined, capacityExcess: 0 };
+    // Recompute the kept driver's over-capacity against the reduced volume, so
+    // the "+N over" badge disappears once they're back within their max.
+    const keptMax = registry[splittingRoute.driverId]?.maxCapacity ?? DRIVER_MAX_CAPACITIES[splittingRoute.driverId];
+    const keptExcess = keptMax !== undefined ? Math.max(0, firstVolume - keptMax) : 0;
+    const keptCap: Pick<RouteData, 'capacityStatus' | 'capacityExcess'> = keptMax === undefined
+      ? { capacityStatus: undefined, capacityExcess: 0 }
+      : { capacityStatus: keptExcess > 20 ? 'warn' : 'ok', capacityExcess: keptExcess };
     setRoutes(prev => {
       const idx = prev.findIndex(r => r.id === splittingRoute.id);
       if (idx === -1) return prev;
       const updated = [...prev];
-      updated[idx] = { ...splittingRoute, orderVolume: firstVolume, isSplit: true };
+      updated[idx] = { ...splittingRoute, orderVolume: firstVolume, isSplit: true, ...keptCap };
       updated.splice(idx + 1, 0, secondPart);
       return updated;
     });
