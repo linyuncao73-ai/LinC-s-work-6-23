@@ -22,7 +22,7 @@ export interface AgencyGroup {
   routes: RouteData[];
 }
 
-export const AGENCIES = ['Alain', 'Ammar', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
+export const AGENCIES = ['Alain', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
 
 export interface BatchInfo {
   date: string;
@@ -302,25 +302,9 @@ function buildInitialRegistry(): DriverRegistry {
   '18940': { name: 'Alain Team', group: 'Alain' },
   '32108': { name: 'Alain Team', group: 'Alain' },
   '18943': { name: 'Alain Team', group: 'Alain' },
-  // Ammar
+  // Former Ammar brokers, now company drivers
   '13456': { name: 'Ammar', group: 'Company' },
-  '32331': { name: 'Ammar Team', group: 'Ammar' },
-  '32450': { name: 'Ammar Team', group: 'Ammar' },
-  '32623': { name: 'Ammar Team', group: 'Ammar' },
-  '32171': { name: 'Ammar Team', group: 'Ammar' },
-  '32338': { name: 'Ammar Team', group: 'Ammar' },
   '12572': { name: 'Nada', group: 'Company' },
-  '31802': { name: 'Ammar Team', group: 'Ammar' },
-  '32348': { name: 'Ammar Team', group: 'Ammar' },
-  '5000225': { name: 'Ammar Team', group: 'Ammar' },
-  '5000227': { name: 'Ammar Team', group: 'Ammar' },
-  '500808': { name: 'Ammar Team', group: 'Ammar' },
-  '500147': { name: 'Ammar Team', group: 'Ammar' },
-  '32328': { name: 'Ammar Team', group: 'Ammar' },
-  '5001788': { name: 'Ammar Team', group: 'Ammar' },
-  '5000807': { name: 'Ammar Team', group: 'Ammar' },
-  '500427': { name: 'Ammar Team', group: 'Ammar' },
-  '500227': { name: 'Ammar Team', group: 'Ammar' },
   // Alawi
   '15170': { name: 'Alawi Team', group: 'Alawi' },
   '15169': { name: 'Alawi Team', group: 'Alawi' },

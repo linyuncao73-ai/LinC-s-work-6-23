@@ -64,7 +64,6 @@ const getAgencyColor = (group: string) => {
     case 'Alain': return 'bg-blue-600 text-white border-blue-700';
     case 'Parfait': return 'bg-purple-100 text-purple-900 border-purple-200';
     case 'Alawi': return 'bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200';
-    case 'Ammar': return 'bg-pink-600 text-white border-pink-700';
     case 'Chris': return 'bg-emerald-100 text-emerald-900 border-emerald-200';
     case 'Company': return 'bg-slate-200 text-slate-900 border-slate-300 shadow-sm';
     default: return 'bg-gray-200 text-gray-800 border-gray-300';
