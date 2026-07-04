@@ -1057,8 +1057,14 @@ const App: React.FC = () => {
     if (!saved) return INITIAL_DRIVER_REGISTRY;
     try {
       const parsed = JSON.parse(saved);
-      // Merge: priority to saved data, but include new defaults
-      return { ...INITIAL_DRIVER_REGISTRY, ...parsed };
+      // Merge rule: name/group (driver identity) always come from the code
+      // defaults so roster corrections reach existing browsers; runtime
+      // fields like maxCapacity (learned from e-binder) persist from saved.
+      const merged: DriverRegistry = { ...parsed };
+      for (const [id, def] of Object.entries(INITIAL_DRIVER_REGISTRY)) {
+        merged[id] = { ...(parsed[id] || {}), ...def, maxCapacity: parsed[id]?.maxCapacity ?? (def as any).maxCapacity };
+      }
+      return merged;
     } catch (e) {
       return INITIAL_DRIVER_REGISTRY;
     }
