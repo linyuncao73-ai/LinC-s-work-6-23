@@ -44,6 +44,11 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     - The cell has a solid RED or PINK background (with or without text), OR
     - The cell contains off text: "off", "OFF", "of" (typo), "休", "7.5 off",
       "0705 off" (4-digit MMDD), "6.23 off", etc.
+    - A cell can be BOTH red AND contain text (e.g. a red cell with "7.5 off") —
+      it is OFF; report the text as evidence.
+    - When a row has some red cells and some green cells, each red-cell column is
+      OFF and each green-cell column is WORKING — check every column one by one,
+      do not stop after finding the first off marker in a row.
 
     For each offDays entry output:
     - date: the column header date (e.g. "7-5")

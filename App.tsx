@@ -841,7 +841,7 @@ const MainEditor: React.FC<{
                             const rowBg = route.isHold
                               ? 'bg-rose-50/40'
                               : isOff
-                              ? 'bg-amber-50/60'
+                              ? 'bg-red-50/80'
                               : route.capacityStatus === 'split-recommended'
                               ? 'bg-orange-50/50'
                               : route.capacityStatus === 'warn'
@@ -855,13 +855,13 @@ const MainEditor: React.FC<{
                                             {route.isHold && <span className="bg-red-100 text-red-800 text-[8px] font-black px-1.5 py-0.5 rounded border border-red-200 uppercase tracking-wider">HOLD</span>}
                                             {isOff && (
                                               <>
-                                                <span className="bg-amber-100 text-amber-800 text-[8px] font-black px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider">Driver Off</span>
+                                                <span className="bg-red-500 text-white text-[9px] font-black px-2 py-1 rounded-md border border-red-600 uppercase tracking-wider animate-pulse shadow-sm">Driver Off</span>
                                                 <button
                                                   onClick={e => { e.stopPropagation(); onOpenReassign(route); }}
-                                                  className="bg-amber-50 text-amber-600 border border-amber-200 text-[8px] font-black px-1.5 py-0.5 rounded hover:bg-amber-100 transition-all"
+                                                  className="bg-amber-400 text-white text-[10px] font-black px-3 py-1.5 rounded-lg hover:bg-amber-500 shadow-md transition-all uppercase tracking-wider"
                                                   title="Quick Reassign"
                                                 >
-                                                  <i className="fa-solid fa-arrow-right-arrow-left"></i>
+                                                  <i className="fa-solid fa-arrow-right-arrow-left mr-1"></i>Reassign
                                                 </button>
                                               </>
                                             )}
