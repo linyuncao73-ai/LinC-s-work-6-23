@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { DriverRegistry, SCAN_ID_MAP, ZONE_NAMES, RouteData, BatchInfo, getDefaultTimeSlot, getOttawaTodayDateString } from "../types";
 import { getApiKey } from "./apiKey";
+import { generateWithRetry } from "./geminiClient";
 
 async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: string, mimeType: string } }> {
   return new Promise((resolve, reject) => {
@@ -60,8 +61,7 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
     - rows (array of route objects)
   `;
 
-  const response: GenerateContentResponse = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+  const response: GenerateContentResponse = await generateWithRetry(ai, {
     contents: { parts: [imagePart, { text: prompt }] },
     config: {
       responseMimeType: "application/json",

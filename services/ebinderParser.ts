@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { EbinderData, EbinderDriverRow, normalizeEbinderDate } from "../types";
 import { getApiKey } from "./apiKey";
+import { generateWithRetry } from "./geminiClient";
 
 async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: string; mimeType: string } }> {
   return new Promise((resolve, reject) => {
@@ -58,8 +59,7 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     - Keep drivers in the SAME order as the rows appear in the spreadsheet (top to bottom).
   `;
 
-  const response: GenerateContentResponse = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+  const response: GenerateContentResponse = await generateWithRetry(ai, {
     contents: { parts: [imagePart, { text: prompt }] },
     config: {
       responseMimeType: "application/json",

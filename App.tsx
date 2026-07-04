@@ -1108,7 +1108,7 @@ const App: React.FC = () => {
   const handleEbinderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     setEbinderLoading(true);
-    setEbinderStatus({ type: 'loading', message: '正在解析文件，请稍候…' });
+    setEbinderStatus({ type: 'loading', message: '正在解析文件（模型繁忙时会自动重试，最多约 30 秒）…' });
     try {
       const data = await parseEbinderImage(file);
       setRegistry(prev => {
