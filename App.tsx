@@ -309,17 +309,17 @@ const AvailabilityPanel: React.FC<{
   // E-binder sheet row order first (so the panel matches the spreadsheet top-to-bottom),
   // then any company drivers from the registry that weren't in the e-binder.
   const ebIdSet = new Set(ebinderData.drivers.map(d => d.driverId));
-  const companyDrivers: [string, { name: string; maxCapacity?: number }][] = [
+  const companyDrivers: [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }][] = [
     ...ebinderData.drivers.map(d => {
       const reg = registry[d.driverId];
       return [d.driverId, {
         name: reg?.name || d.driverName,
         maxCapacity: reg?.maxCapacity ?? d.maxCapacity ?? undefined,
-      }] as [string, { name: string; maxCapacity?: number }];
+      }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
     }),
     ...Object.entries(registry)
       .filter(([id, d]) => d.group === 'Company' && !ebIdSet.has(id))
-      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity }] as [string, { name: string; maxCapacity?: number }]),
+      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: true }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }]),
   ];
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
   const dateInEbinder = ebinderData.weekDates.some(wd => {
@@ -356,7 +356,7 @@ const AvailabilityPanel: React.FC<{
               className={`flex flex-col items-center px-3 py-2 rounded-xl border text-left transition-all ${isOff ? 'bg-amber-50 border-amber-200 opacity-70' : 'bg-emerald-50 border-emerald-200 hover:border-emerald-400'}`}
             >
               <span className={`text-[10px] font-black ${isOff ? 'text-amber-700 line-through' : 'text-emerald-800'}`}>{id} {driver.name}</span>
-              <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
+              <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{driver.notOnSheet ? 'Not on sheet' : isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
             </button>
           );
         })}
@@ -1083,13 +1083,20 @@ const App: React.FC = () => {
   const dispatchDate = useMemo(() => getOttawaTomorrowDateString(), []);
 
   const offDriverIdsFinal = useMemo<Set<string>>(() => {
-    const base = ebinderData ? getOffDriverIds(ebinderData, dispatchDate) : new Set<string>();
-    const result = new Set(base);
+    const result = ebinderData ? getOffDriverIds(ebinderData, dispatchDate) : new Set<string>();
+    if (ebinderData) {
+      // The e-binder sheet is the roster of record: company drivers missing
+      // from it (quit, long leave) must not be scheduled.
+      const rosterIds = new Set(ebinderData.drivers.map(d => d.driverId));
+      for (const [id, d] of Object.entries(registry)) {
+        if (d.group === 'Company' && !rosterIds.has(id)) result.add(id);
+      }
+    }
     for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
       if (isOff) result.add(id); else result.delete(id);
     }
     return result;
-  }, [ebinderData, dispatchDate, ebinderManualOverrides]);
+  }, [ebinderData, dispatchDate, ebinderManualOverrides, registry]);
 
   useEffect(() => {
     localStorage.setItem('yow_dispatch_routes', JSON.stringify(routes));
@@ -1182,10 +1189,7 @@ const App: React.FC = () => {
   const handleAutoAssign = () => {
     setBatchInfo(prev => ({ ...prev, date: dispatchDate }));
 
-    const activeOffIds = ebinderData ? getOffDriverIds(ebinderData, dispatchDate) : new Set<string>();
-    for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
-      if (isOff) activeOffIds.add(id); else activeOffIds.delete(id);
-    }
+    const activeOffIds = offDriverIdsFinal;
 
     setRoutes(prev => prev.map(route => {
         const placeholderKey = route.driverId || '';

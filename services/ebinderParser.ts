@@ -28,34 +28,40 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     - Column D: Notes or preferred routes (ignore)
     - Column E: MAX parcel capacity (numeric, e.g. 300, 250, 200, 150). Use null if empty or "N/A".
     - Remaining columns: date headers like "6-29", "6-30", "7-1", "7-2", "7-3", "7-4", "7-5"
-      Each date cell for a driver is either:
-      - WORKING: cell is light green / empty / has the driver name or a checkmark
-      - OFF: cell has a RED or PINK background (even with NO text), AND/OR contains text like
-        "6.23 off", "7.5 off", "0705 off" (4-digit MMDD), "off", "OFF", "of" (common typo for off), "休"
 
     Your task:
     1. Find all date column headers (like "6-29", "7-5" etc.) and list them as weekDates.
-    2. For each driver row where Column B has a numeric ID:
-       - Extract driverId (Column B, numbers only as string)
-       - Extract driverName (Column C)
-       - Extract maxCapacity (Column E as number, or null)
-       - For each date column: determine if the driver is OFF that day.
-         Collect ONLY the dates when the driver is OFF into offDates array.
-         If the driver works all week, offDates = [].
+    2. For each driver row where Column B has a numeric ID, extract:
+       - driverId (Column B, numbers only as string)
+       - driverName (Column C)
+       - maxCapacity (Column E as number, or null)
+       - offDays: the dates this driver is OFF, each with the evidence you saw.
 
-    OFF detection rules (critical):
-    - A cell with a solid RED/PINK background counts as OFF for that date column,
-      even if the cell contains no text at all.
-    - If the ENTIRE row of date cells is red, the driver is off ALL week:
-      offDates must include every date in weekDates.
-    - Text like "0705 off" or "0704 of" means off on 07-05 / 07-04 (MMDD digits).
-      Map it to the matching column header date.
-    - Notes that are NOT off markers must be IGNORED: route preferences like "Route 1.1",
-      location notes, or any text without "off"/"of"/"休" in a non-red cell means WORKING.
+    THE DEFAULT IS WORKING. A light green or empty date cell ALWAYS means the driver
+    works that day. Most drivers work the entire week — being off is the exception.
+    Only report a date in offDays when you can see explicit evidence IN THAT DRIVER'S
+    OWN ROW:
+    - The cell has a solid RED or PINK background (with or without text), OR
+    - The cell contains off text: "off", "OFF", "of" (typo), "休", "7.5 off",
+      "0705 off" (4-digit MMDD), "6.23 off", etc.
+
+    For each offDays entry output:
+    - date: the column header date (e.g. "7-5")
+    - evidence: exactly what you saw — the cell's text (e.g. "0705 off"),
+      or "red cell" if the cell is red/pink with no text.
+
+    CRITICAL — avoid these mistakes:
+    - Process ONE ROW AT A TIME. A red cell in one driver's row must NEVER cause a
+      neighboring row's driver to be marked off. Before adding an offDays entry,
+      re-check that the red cell or off text is on the same horizontal row as that
+      driver's ID.
+    - Route notes are NOT off markers: text like "Route 1.1" or a preferred-route
+      note in a green cell means the driver WORKS that day.
+    - If the ENTIRE row of date cells is red, include every weekDate in offDays
+      with evidence "red cell".
 
     IMPORTANT:
     - Skip any row that doesn't have a numeric driver ID in Column B (skip headers, totals, empty rows).
-    - offDates should contain the date strings exactly as they appear in the column headers (e.g. "7-5").
     - Keep drivers in the SAME order as the rows appear in the spreadsheet (top to bottom).
   `;
 
@@ -63,13 +69,14 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     contents: { parts: [imagePart, { text: prompt }] },
     config: {
       responseMimeType: "application/json",
+      temperature: 0,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
           weekDates: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
-            description: "Date column headers found, e.g. ['6-22','6-23','6-24','6-25','6-26','6-27']"
+            description: "Date column headers found, e.g. ['6-29','6-30','7-1','7-2','7-3','7-4','7-5']"
           },
           drivers: {
             type: Type.ARRAY,
@@ -79,9 +86,19 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
                 driverId:    { type: Type.STRING },
                 driverName:  { type: Type.STRING },
                 maxCapacity: { type: Type.NUMBER },
-                offDates:    { type: Type.ARRAY, items: { type: Type.STRING } }
+                offDays: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      date:     { type: Type.STRING, description: "Column header date, e.g. '7-5'" },
+                      evidence: { type: Type.STRING, description: "Cell text seen, or 'red cell' for a red/pink cell with no text" }
+                    },
+                    required: ["date", "evidence"]
+                  }
+                }
               },
-              required: ["driverId", "driverName", "offDates"]
+              required: ["driverId", "driverName", "offDays"]
             }
           }
         },
@@ -92,16 +109,21 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
 
   const raw = JSON.parse(response.text || "{}");
 
+  // Only trust off entries whose evidence is an actual off marker; this drops
+  // hallucinated entries and notes like "Route 1.1" that slipped through.
+  const isOffEvidence = (ev: string) => /red|pink|\boff?\b|休/i.test(ev);
+
   const drivers: EbinderDriverRow[] = (raw.drivers || [])
     .filter((d: any) => /^\d+$/.test(String(d.driverId || '').trim()))
     .map((d: any) => ({
       driverId:    String(d.driverId).trim(),
       driverName:  String(d.driverName || ''),
       maxCapacity: typeof d.maxCapacity === 'number' && d.maxCapacity > 0 ? d.maxCapacity : null,
-      offDates:    Array.isArray(d.offDates)
-        ? d.offDates
-            .map((s: any) => {
-              const norm = normalizeEbinderDate(String(s));
+      offDates:    Array.isArray(d.offDays)
+        ? d.offDays
+            .filter((o: any) => o && isOffEvidence(String(o.evidence || '')))
+            .map((o: any) => {
+              const norm = normalizeEbinderDate(String(o.date));
               return norm ? `${norm.m}-${norm.d}` : '';
             })
             .filter((s: string) => s !== '')

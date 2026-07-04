@@ -1,7 +1,8 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
-// Primary model first, then lower-load fallbacks that are rarely overloaded.
-const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+// Primary model first. Fallbacks favor vision accuracy: dense-table OCR gets
+// worse on lite models, so prefer 2.5-pro before dropping to 2.0-flash.
+const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
 const ATTEMPTS_PER_MODEL = 2;
 const RETRY_DELAY_MS = 1500;
 
