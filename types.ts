@@ -22,7 +22,7 @@ export interface AgencyGroup {
   routes: RouteData[];
 }
 
-export const AGENCIES = ['Alain', 'Ammar', 'Alawi', 'Kaneza', 'Parfait', 'Massi', 'Chris'];
+export const AGENCIES = ['Alain', 'Ammar', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
 
 export interface BatchInfo {
   date: string;
@@ -367,10 +367,6 @@ function buildInitialRegistry(): DriverRegistry {
   '28704': { name: 'Parfait Team', group: 'Parfait' },
   '5002460': { name: 'Parfait Team', group: 'Parfait' },
   '29804': { name: 'Parfait Team', group: 'Parfait' },
-  // Massi
-  '31988': { name: 'Massi Team', group: 'Massi' },
-  '31990': { name: 'Massi Team', group: 'Massi' },
-  '32089': { name: 'Massi Team', group: 'Massi' },
   // Chris
   '30907': { name: 'Chris Team', group: 'Chris' },
   '20255': { name: 'Chris Team', group: 'Chris' },

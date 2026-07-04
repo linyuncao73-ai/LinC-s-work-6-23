@@ -62,7 +62,6 @@ const getAgencyColor = (group: string) => {
   switch (group) {
     case 'Kaneza': return 'bg-rose-100 text-rose-900 border-rose-200';
     case 'Alain': return 'bg-blue-600 text-white border-blue-700';
-    case 'Massi': return 'bg-cyan-100 text-cyan-900 border-cyan-200';
     case 'Parfait': return 'bg-purple-100 text-purple-900 border-purple-200';
     case 'Alawi': return 'bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200';
     case 'Ammar': return 'bg-pink-600 text-white border-pink-700';
@@ -1064,6 +1063,11 @@ const App: React.FC = () => {
       for (const [id, def] of Object.entries(INITIAL_DRIVER_REGISTRY)) {
         merged[id] = { ...(parsed[id] || {}), ...def, maxCapacity: parsed[id]?.maxCapacity ?? (def as any).maxCapacity };
       }
+      // Purge saved entries whose group no longer exists (e.g. removed broker teams)
+      const validGroups = new Set(['Company', 'Unassigned', ...AGENCIES]);
+      for (const id of Object.keys(merged)) {
+        if (!validGroups.has(merged[id].group)) delete merged[id];
+      }
       return merged;
     } catch (e) {
       return INITIAL_DRIVER_REGISTRY;
@@ -1417,7 +1421,14 @@ const App: React.FC = () => {
                 <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-orange-100">
                     <i className="fa-solid fa-truck-fast"></i>
                 </div>
-                <h1 className="text-xl font-black text-slate-900 tracking-tight">Driver Dispatch Assistant</h1>
+                <div>
+                  <h1 className="text-xl font-black text-slate-900 tracking-tight">Driver Dispatch Assistant</h1>
+                  <p className="text-[9px] text-slate-400 font-mono">Build {(() => {
+                    try {
+                      return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(process.env.BUILD_TIME || 0));
+                    } catch { return process.env.BUILD_TIME || 'dev'; }
+                  })()}</p>
+                </div>
             </div>
             <div className="flex items-center gap-3">
               <nav className="flex bg-slate-100 p-1 rounded-2xl">
