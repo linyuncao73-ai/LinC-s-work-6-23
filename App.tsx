@@ -4,7 +4,44 @@ import { parseExcelFile } from './services/excelParser';
 import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
 import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTodayDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
+import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import html2canvas from 'html2canvas';
+
+const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
+  const [value, setValue] = useState(getStoredApiKey());
+  const save = () => {
+    setStoredApiKey(value);
+    onSaved(!!value.trim());
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500"><i className="fa-solid fa-key"></i></div>
+          <h3 className="text-lg font-black text-slate-900">Gemini API Key</h3>
+        </div>
+        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+          Key 只保存在本机浏览器（localStorage），不会上传到任何服务器。
+          没有 key？去 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">aistudio.google.com/apikey</a> 免费创建。
+        </p>
+        <input
+          type="password"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') save(); }}
+          placeholder="AIza..."
+          className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm font-mono focus:border-amber-400 focus:outline-none mb-4"
+          autoFocus
+        />
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl text-xs font-black bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all">Cancel</button>
+          <button onClick={save} className="flex-1 py-3 rounded-xl text-xs font-black bg-amber-500 text-white hover:bg-amber-600 transition-all">Save</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /**
  * Custom sort function for route numbers like 33011-1, 33011-1.1, 33011-4-1
@@ -1025,6 +1062,8 @@ const App: React.FC = () => {
   const ebinderInputRef = useRef<HTMLInputElement>(null);
   const [reassigningRoute, setReassigningRoute] = useState<RouteData | null>(null);
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(() => !!getStoredApiKey());
 
   const offDriverIdsFinal = useMemo<Set<string>>(() => {
     const base = ebinderData ? getOffDriverIds(ebinderData, batchInfo.date) : new Set<string>();
@@ -1354,19 +1393,29 @@ const App: React.FC = () => {
                 </div>
                 <h1 className="text-xl font-black text-slate-900 tracking-tight">Driver Dispatch Assistant</h1>
             </div>
-            <nav className="flex bg-slate-100 p-1 rounded-2xl">
-                {[
-                  { id: 'main', label: 'Editor' },
-                  { id: 'reports', label: 'Reports' },
-                  { id: 'allocations', label: 'Allocations' },
-                  { id: 'print', label: 'Print & Copy' },
-                  { id: 'bookmarks', label: 'Links' }
-                ].map(v => (
-                    <button key={v.id} onClick={() => setView(v.id as any)} className={`px-5 py-2 rounded-xl text-xs font-black transition-all ${view === v.id ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-                        {v.label}
-                    </button>
-                ))}
-            </nav>
+            <div className="flex items-center gap-3">
+              <nav className="flex bg-slate-100 p-1 rounded-2xl">
+                  {[
+                    { id: 'main', label: 'Editor' },
+                    { id: 'reports', label: 'Reports' },
+                    { id: 'allocations', label: 'Allocations' },
+                    { id: 'print', label: 'Print & Copy' },
+                    { id: 'bookmarks', label: 'Links' }
+                  ].map(v => (
+                      <button key={v.id} onClick={() => setView(v.id as any)} className={`px-5 py-2 rounded-xl text-xs font-black transition-all ${view === v.id ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                          {v.label}
+                      </button>
+                  ))}
+              </nav>
+              <button
+                onClick={() => setShowApiKeyModal(true)}
+                title={hasApiKey ? 'API Key 已设置' : '设置 Gemini API Key'}
+                className={`relative w-10 h-10 rounded-xl flex items-center justify-center transition-all ${hasApiKey ? 'bg-slate-100 text-slate-400 hover:text-slate-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
+              >
+                <i className="fa-solid fa-key text-sm"></i>
+                <span className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${hasApiKey ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+              </button>
+            </div>
         </header>
 
         <main className="max-w-7xl mx-auto px-8 mt-10">
@@ -1528,6 +1577,7 @@ const App: React.FC = () => {
             onConfirm={handleBatchSplit}
           />
         )}
+        {showApiKeyModal && <ApiKeyModal onClose={() => setShowApiKeyModal(false)} onSaved={setHasApiKey} />}
     </div>
   );
 };

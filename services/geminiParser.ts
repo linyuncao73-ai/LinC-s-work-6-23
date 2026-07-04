@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { DriverRegistry, SCAN_ID_MAP, ZONE_NAMES, RouteData, BatchInfo, getDefaultTimeSlot, getOttawaTodayDateString } from "../types";
+import { getApiKey } from "./apiKey";
 
 async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: string, mimeType: string } }> {
   return new Promise((resolve, reject) => {
@@ -30,7 +31,7 @@ const parseAllocationSegments = (str: string) => {
 };
 
 export const parseImageFile = async (file: File, registry: DriverRegistry): Promise<{ routes: RouteData[], batchInfo: BatchInfo }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const imagePart = await fileToGenerativePart(file);
 
   const prompt = `
