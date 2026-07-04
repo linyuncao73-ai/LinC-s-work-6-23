@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { parseExcelFile } from './services/excelParser';
 import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
-import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTodayDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import html2canvas from 'html2canvas';
 
@@ -195,7 +195,7 @@ const ReassignModal: React.FC<{
       <div className="p-6 border-b border-slate-50">
         <h3 className="text-lg font-black text-slate-800">Quick Reassign</h3>
         <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
-          {route.routeNum} · {route.driverName} is off today
+          {route.routeNum} · {route.driverName} is off
         </p>
       </div>
       <div className="p-6 space-y-4">
@@ -306,7 +306,21 @@ const AvailabilityPanel: React.FC<{
   onManualToggle: (driverId: string, setOff: boolean) => void;
   onClose: () => void;
 }> = ({ ebinderData, offDriverIds, registry, batchDate, onManualToggle, onClose }) => {
-  const companyDrivers = Object.entries(registry).filter(([, d]) => d.group === 'Company');
+  // E-binder sheet row order first (so the panel matches the spreadsheet top-to-bottom),
+  // then any company drivers from the registry that weren't in the e-binder.
+  const ebIdSet = new Set(ebinderData.drivers.map(d => d.driverId));
+  const companyDrivers: [string, { name: string; maxCapacity?: number }][] = [
+    ...ebinderData.drivers.map(d => {
+      const reg = registry[d.driverId];
+      return [d.driverId, {
+        name: reg?.name || d.driverName,
+        maxCapacity: reg?.maxCapacity ?? d.maxCapacity ?? undefined,
+      }] as [string, { name: string; maxCapacity?: number }];
+    }),
+    ...Object.entries(registry)
+      .filter(([id, d]) => d.group === 'Company' && !ebIdSet.has(id))
+      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity }] as [string, { name: string; maxCapacity?: number }]),
+  ];
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
   const dateInEbinder = ebinderData.weekDates.some(wd => {
     const [m, d] = wd.replace('.', '-').split('-').map(Number);
@@ -320,11 +334,11 @@ const AvailabilityPanel: React.FC<{
       <div className="flex justify-between items-start mb-4">
         <div>
           <h3 className="font-black text-slate-800 text-sm uppercase tracking-wider">Driver Availability</h3>
-          <p className="text-[10px] text-slate-400 mt-0.5">For {batchDate} · Parsed {parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">For tomorrow · {batchDate} · Parsed {parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}</p>
         </div>
         <div className="flex items-center gap-3">
           {!dateInEbinder && (
-            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200">No data for today's date</span>
+            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200">No data for this date</span>
           )}
           <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
           <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
@@ -341,7 +355,7 @@ const AvailabilityPanel: React.FC<{
               title={`Click to toggle · Max: ${maxCap ?? 'No limit'}`}
               className={`flex flex-col items-center px-3 py-2 rounded-xl border text-left transition-all ${isOff ? 'bg-amber-50 border-amber-200 opacity-70' : 'bg-emerald-50 border-emerald-200 hover:border-emerald-400'}`}
             >
-              <span className={`text-[10px] font-black ${isOff ? 'text-amber-700 line-through' : 'text-emerald-800'}`}>{driver.name}</span>
+              <span className={`text-[10px] font-black ${isOff ? 'text-amber-700 line-through' : 'text-emerald-800'}`}>{id} {driver.name}</span>
               <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
             </button>
           );
@@ -1031,7 +1045,7 @@ const App: React.FC = () => {
   
   const [batchInfo, setBatchInfo] = useState<BatchInfo>(() => {
     const saved = localStorage.getItem('yow_dispatch_batch');
-    return saved ? JSON.parse(saved) : { date: getOttawaTodayDateString(), batchId: 'YOW-' + Date.now(), totalVolume: 0 };
+    return saved ? JSON.parse(saved) : { date: getOttawaTomorrowDateString(), batchId: 'YOW-' + Date.now(), totalVolume: 0 };
   });
   const [routes, setRoutes] = useState<RouteData[]>(() => {
     const saved = localStorage.getItem('yow_dispatch_routes');
@@ -1065,14 +1079,17 @@ const App: React.FC = () => {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(() => !!getStoredApiKey());
 
+  // 排班目标日：始终为明天（今天排的是明天的班）
+  const dispatchDate = useMemo(() => getOttawaTomorrowDateString(), []);
+
   const offDriverIdsFinal = useMemo<Set<string>>(() => {
-    const base = ebinderData ? getOffDriverIds(ebinderData, batchInfo.date) : new Set<string>();
+    const base = ebinderData ? getOffDriverIds(ebinderData, dispatchDate) : new Set<string>();
     const result = new Set(base);
     for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
       if (isOff) result.add(id); else result.delete(id);
     }
     return result;
-  }, [ebinderData, batchInfo.date, ebinderManualOverrides]);
+  }, [ebinderData, dispatchDate, ebinderManualOverrides]);
 
   useEffect(() => {
     localStorage.setItem('yow_dispatch_routes', JSON.stringify(routes));
@@ -1105,10 +1122,10 @@ const App: React.FC = () => {
       });
       setEbinderData(data);
       setShowAvailabilityPanel(true);
-      const offCount = getOffDriverIds(data, batchInfo.date).size;
+      const offCount = getOffDriverIds(data, dispatchDate).size;
       setEbinderStatus({
         type: 'success',
-        message: `成功导入 ${data.drivers.length} 条记录 · ${data.weekDates.length} 个日期列 · 今日请假 ${offCount} 人`,
+        message: `成功导入 ${data.drivers.length} 条记录 · ${data.weekDates.length} 个日期列 · 明日（${dispatchDate.split('/').slice(0, 2).map(Number).join('-')}）请假 ${offCount} 人`,
       });
     } catch (err: any) {
       setEbinderStatus({ type: 'error', message: err.message || '未知错误，请重试' });
@@ -1163,10 +1180,9 @@ const App: React.FC = () => {
   }, [registry]);
 
   const handleAutoAssign = () => {
-    const todayOttawa = getOttawaTodayDateString();
-    setBatchInfo(prev => ({ ...prev, date: todayOttawa }));
+    setBatchInfo(prev => ({ ...prev, date: dispatchDate }));
 
-    const activeOffIds = ebinderData ? getOffDriverIds(ebinderData, todayOttawa) : new Set<string>();
+    const activeOffIds = ebinderData ? getOffDriverIds(ebinderData, dispatchDate) : new Set<string>();
     for (const [id, isOff] of Object.entries(ebinderManualOverrides)) {
       if (isOff) activeOffIds.add(id); else activeOffIds.delete(id);
     }
@@ -1182,7 +1198,7 @@ const App: React.FC = () => {
                             route.routeLocation;
 
         const baseRoute = route.routeNum?.split('-')[0] || '';
-        const newTime = getDefaultTimeSlot(baseRoute, todayOttawa);
+        const newTime = getDefaultTimeSlot(baseRoute, dispatchDate);
 
         if (realId) {
             const driverData = registry[realId];
@@ -1448,7 +1464,7 @@ const App: React.FC = () => {
                       <p className="text-[10px] font-black uppercase text-slate-400">E-Binder</p>
                       <h4 className="font-bold">{ebinderLoading ? 'Parsing...' : ebinderData ? 'Availability Loaded' : 'Upload Availability'}</h4>
                       {ebinderData && offDriverIdsFinal.size > 0 && (
-                        <p className="text-[9px] text-amber-600 font-bold mt-0.5">{offDriverIdsFinal.size} off today</p>
+                        <p className="text-[9px] text-amber-600 font-bold mt-0.5">{offDriverIdsFinal.size} off tomorrow</p>
                       )}
                       {ebinderData && offDriverIdsFinal.size === 0 && (
                         <p className="text-[9px] text-emerald-600 font-bold mt-0.5">All drivers available</p>
@@ -1509,7 +1525,7 @@ const App: React.FC = () => {
                   ebinderData={ebinderData}
                   offDriverIds={offDriverIdsFinal}
                   registry={registry}
-                  batchDate={batchInfo.date}
+                  batchDate={dispatchDate}
                   onManualToggle={handleManualToggle}
                   onClose={() => setShowAvailabilityPanel(false)}
                 />

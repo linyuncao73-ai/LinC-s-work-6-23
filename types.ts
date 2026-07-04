@@ -506,8 +506,8 @@ export function getDefaultTimeSlot(baseRoute: string, dateStr: string): string {
   return DEFAULT_TIME_SLOTS[baseRoute] || '08:00 AM';
 }
 
-export function getOttawaTodayDateString(): string {
-  const d = new Date();
+function getOttawaDateString(offsetDays: number): string {
+  const d = new Date(Date.now() + offsetDays * 86400000);
   try {
     const formatter = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Toronto',
@@ -528,6 +528,14 @@ export function getOttawaTodayDateString(): string {
   }
 }
 
+export function getOttawaTodayDateString(): string {
+  return getOttawaDateString(0);
+}
+
+export function getOttawaTomorrowDateString(): string {
+  return getOttawaDateString(1);
+}
+
 // E-Binder types and helpers
 
 export interface EbinderDriverRow {
@@ -543,13 +551,39 @@ export interface EbinderData {
   parsedAt: number;
 }
 
+/**
+ * Extracts month/day from the many date formats seen in e-binder cells:
+ * "7-5", "7.5", "07-05", "0705", "0705 off", "7.5 off", "6.23 off", "休 7.5"
+ */
+export function normalizeEbinderDate(s: string): { m: number; d: number } | null {
+  const digits = String(s).match(/\d+/g);
+  if (!digits || digits.length === 0) return null;
+  if (digits.length >= 2) {
+    const m = parseInt(digits[0]);
+    const d = parseInt(digits[1]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return { m, d };
+    return null;
+  }
+  // Single number: 4-digit MMDD like "0705", or 3-digit MDD like "705"
+  const one = digits[0];
+  if (one.length === 4) {
+    const m = parseInt(one.slice(0, 2));
+    const d = parseInt(one.slice(2));
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return { m, d };
+  }
+  if (one.length === 3) {
+    const m = parseInt(one.slice(0, 1));
+    const d = parseInt(one.slice(1));
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return { m, d };
+  }
+  return null;
+}
+
 export function ebinderDateMatchesBatchDate(ebDate: string, batchDate: string): boolean {
-  const normalized = ebDate.replace('.', '-');
-  const parts = normalized.split('-');
-  const m = parseInt(parts[0]);
-  const d = parseInt(parts[1]);
+  const norm = normalizeEbinderDate(ebDate);
+  if (!norm) return false;
   const bParts = batchDate.split('/');
-  return m === parseInt(bParts[0]) && d === parseInt(bParts[1]);
+  return norm.m === parseInt(bParts[0]) && norm.d === parseInt(bParts[1]);
 }
 
 export function getOffDriverIds(ebinder: EbinderData, batchDate: string): Set<string> {
