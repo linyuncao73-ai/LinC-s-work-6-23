@@ -855,6 +855,7 @@ const App: React.FC = () => {
   });
   const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>({});
   const [ebinderLoading, setEbinderLoading] = useState(false);
+  const [ebinderStatus, setEbinderStatus] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
   const [showAvailabilityPanel, setShowAvailabilityPanel] = useState(false);
   const ebinderInputRef = useRef<HTMLInputElement>(null);
 
@@ -875,10 +876,16 @@ const App: React.FC = () => {
   useEffect(() => localStorage.setItem('yow_dispatch_batch', JSON.stringify(batchInfo)), [batchInfo]);
   useEffect(() => localStorage.setItem('yow_dispatch_registry', JSON.stringify(registry)), [registry]);
   useEffect(() => { if (ebinderData) localStorage.setItem('yow_dispatch_ebinder', JSON.stringify(ebinderData)); }, [ebinderData]);
+  useEffect(() => {
+    if (ebinderStatus?.type !== 'success') return;
+    const t = setTimeout(() => setEbinderStatus(null), 5000);
+    return () => clearTimeout(t);
+  }, [ebinderStatus]);
 
   const handleEbinderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     setEbinderLoading(true);
+    setEbinderStatus({ type: 'loading', message: '正在解析文件，请稍候…' });
     try {
       const data = await parseEbinderImage(file);
       setRegistry(prev => {
@@ -892,8 +899,17 @@ const App: React.FC = () => {
       });
       setEbinderData(data);
       setShowAvailabilityPanel(true);
-    } catch (err: any) { alert(`E-binder parse error: ${err.message}`); }
-    finally { setEbinderLoading(false); e.target.value = ''; }
+      const offCount = getOffDriverIds(data, batchInfo.date).size;
+      setEbinderStatus({
+        type: 'success',
+        message: `成功导入 ${data.drivers.length} 条记录 · ${data.weekDates.length} 个日期列 · 今日请假 ${offCount} 人`,
+      });
+    } catch (err: any) {
+      setEbinderStatus({ type: 'error', message: err.message || '未知错误，请重试' });
+    } finally {
+      setEbinderLoading(false);
+      e.target.value = '';
+    }
   };
 
   const handleManualToggle = (driverId: string, setOff: boolean) => {
@@ -1115,7 +1131,7 @@ const App: React.FC = () => {
                   </div>
                   <div
                     onClick={() => ebinderInputRef.current?.click()}
-                    className={`bg-white p-6 rounded-3xl shadow-sm border flex items-center gap-4 cursor-pointer hover:shadow-lg transition-all ${ebinderData ? 'border-emerald-200 hover:border-emerald-500' : 'border-slate-100 hover:border-emerald-500'}`}
+                    className={`bg-white p-6 rounded-3xl shadow-sm border flex items-center gap-4 cursor-pointer hover:shadow-lg transition-all ${ebinderLoading ? 'border-blue-300 shadow-blue-100 shadow-sm' : ebinderData ? 'border-emerald-200 hover:border-emerald-500' : 'border-slate-100 hover:border-emerald-500'}`}
                   >
                     <input type="file" ref={ebinderInputRef} onChange={handleEbinderUpload} className="hidden" accept="image/*" />
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${ebinderLoading ? 'bg-emerald-50' : ebinderData ? 'bg-emerald-100' : 'bg-emerald-50'}`}>
@@ -1135,6 +1151,21 @@ const App: React.FC = () => {
                       )}
                     </div>
                   </div>
+                  {ebinderStatus && (
+                    <div className={`lg:col-span-7 px-4 py-2.5 rounded-2xl text-xs flex items-center gap-2 -mt-2 ${
+                      ebinderStatus.type === 'loading' ? 'bg-blue-50 text-blue-700'
+                      : ebinderStatus.type === 'success' ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-red-50 text-red-700'
+                    }`}>
+                      {ebinderStatus.type === 'loading' && <i className="fa-solid fa-spinner animate-spin text-xs flex-shrink-0"></i>}
+                      {ebinderStatus.type === 'success' && <i className="fa-solid fa-circle-check text-xs flex-shrink-0"></i>}
+                      {ebinderStatus.type === 'error' && <i className="fa-solid fa-circle-xmark text-xs flex-shrink-0"></i>}
+                      <span className="font-medium">{ebinderStatus.message}</span>
+                      {ebinderStatus.type !== 'loading' && (
+                        <button onClick={(ev) => { ev.stopPropagation(); setEbinderStatus(null); }} className="ml-auto opacity-50 hover:opacity-100 text-base leading-none">✕</button>
+                      )}
+                    </div>
+                  )}
                   <div onClick={handleAutoAssign} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-blue-500 hover:shadow-lg transition-all">
                       <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-500"><i className="fa-solid fa-wand-magic-sparkles"></i></div>
                       <div><p className="text-[10px] font-black uppercase text-slate-400">Smart Fix</p><h4 className="font-bold">Auto-Assign</h4></div>

@@ -8,7 +8,7 @@ async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: s
       const base64Data = (reader.result as string).split(',')[1];
       resolve({ inlineData: { data: base64Data, mimeType: file.type } });
     };
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error('文件读取失败，请重试'));
     reader.readAsDataURL(file);
   });
 }
@@ -92,8 +92,17 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
         : []
     }));
 
+  const weekDates = Array.isArray(raw.weekDates) ? raw.weekDates.map(String) : [];
+
+  if (weekDates.length === 0) {
+    throw new Error('未能识别任何日期列（如"6-22"、"6-23"）。请确认上传的是 e-binder 班表截图，且截图包含完整列标题行。');
+  }
+  if (drivers.length === 0) {
+    throw new Error('未能识别任何司机行。请确认截图中 B 列有纯数字司机 ID，且图片清晰完整。');
+  }
+
   return {
-    weekDates: Array.isArray(raw.weekDates) ? raw.weekDates.map(String) : [],
+    weekDates,
     drivers,
     parsedAt: Date.now()
   };
