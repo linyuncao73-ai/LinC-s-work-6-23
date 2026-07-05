@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { parseExcelFile } from './services/excelParser';
 import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
-import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, DispatchSnapshot } from './services/cloudSync';
 import html2canvas from 'html2canvas';
@@ -298,18 +298,20 @@ const BatchSplitModal: React.FC<{
 };
 
 const AvailabilityPanel: React.FC<{
-  ebinderData: EbinderData;
+  ebinderData: EbinderData | null;
   offDriverIds: Set<string>;
   registry: DriverRegistry;
   batchDate: string;
   onManualToggle: (driverId: string, setOff: boolean) => void;
   onClose: () => void;
 }> = ({ ebinderData, offDriverIds, registry, batchDate, onManualToggle, onClose }) => {
-  // E-binder sheet row order first (so the panel matches the spreadsheet top-to-bottom),
-  // then any company drivers from the registry that weren't in the e-binder.
-  const ebIdSet = new Set(ebinderData.drivers.map(d => d.driverId));
+  // With e-binder data: sheet row order first, then registry-only company drivers.
+  // Without: all company drivers from the registry.
+  const removed = new Set(REMOVED_DRIVER_IDS);
+  const ebRows = (ebinderData?.drivers || []).filter(d => !removed.has(d.driverId));
+  const ebIdSet = new Set(ebRows.map(d => d.driverId));
   const companyDrivers: [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }][] = [
-    ...ebinderData.drivers.map(d => {
+    ...ebRows.map(d => {
       const reg = registry[d.driverId];
       return [d.driverId, {
         name: reg?.name || d.driverName,
@@ -317,28 +319,20 @@ const AvailabilityPanel: React.FC<{
       }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
     }),
     ...Object.entries(registry)
-      .filter(([id, d]) => d.group === 'Company' && !ebIdSet.has(id))
-      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: true }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }]),
+      .filter(([id, d]) => d.group === 'Company' && !ebIdSet.has(id) && !removed.has(id))
+      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: !!ebinderData }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }]),
   ];
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
-  const dateInEbinder = ebinderData.weekDates.some(wd => {
-    const [m, d] = wd.replace('.', '-').split('-').map(Number);
-    const bParts = batchDate.split('/');
-    return m === parseInt(bParts[0]) && d === parseInt(bParts[1]);
-  });
-  const parsedAgo = Math.round((Date.now() - ebinderData.parsedAt) / 60000);
+  const parsedAgo = ebinderData ? Math.round((Date.now() - ebinderData.parsedAt) / 60000) : null;
 
   return (
     <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-6">
       <div className="flex justify-between items-start mb-4">
         <div>
           <h3 className="font-black text-slate-800 text-sm uppercase tracking-wider">Driver Availability</h3>
-          <p className="text-[10px] text-slate-400 mt-0.5">For tomorrow · {batchDate} · Parsed {parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">For tomorrow · {batchDate}{parsedAgo !== null && ` · Parsed ${parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}`}</p>
         </div>
         <div className="flex items-center gap-3">
-          {!dateInEbinder && (
-            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200">No data for this date</span>
-          )}
           <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
           <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
         </div>
@@ -1068,6 +1062,7 @@ const App: React.FC = () => {
       for (const id of Object.keys(merged)) {
         if (!validGroups.has(merged[id].group)) delete merged[id];
       }
+      for (const id of REMOVED_DRIVER_IDS) delete merged[id];
       return merged;
     } catch (e) {
       return INITIAL_DRIVER_REGISTRY;
@@ -1079,10 +1074,14 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('yow_dispatch_ebinder');
     try { return saved ? JSON.parse(saved) : null; } catch { return null; }
   });
-  const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>({});
+  const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('yow_dispatch_overrides') || '{}');
+    } catch { return {}; }
+  });
   const [ebinderLoading, setEbinderLoading] = useState(false);
   const [ebinderStatus, setEbinderStatus] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
-  const [showAvailabilityPanel, setShowAvailabilityPanel] = useState(false);
+  const [showAvailabilityPanel, setShowAvailabilityPanel] = useState(true);
   const ebinderInputRef = useRef<HTMLInputElement>(null);
   const [reassigningRoute, setReassigningRoute] = useState<RouteData | null>(null);
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
@@ -1118,6 +1117,7 @@ const App: React.FC = () => {
   useEffect(() => localStorage.setItem('yow_dispatch_batch', JSON.stringify(batchInfo)), [batchInfo]);
   useEffect(() => localStorage.setItem('yow_dispatch_registry', JSON.stringify(registry)), [registry]);
   useEffect(() => { if (ebinderData) localStorage.setItem('yow_dispatch_ebinder', JSON.stringify(ebinderData)); }, [ebinderData]);
+  useEffect(() => { localStorage.setItem('yow_dispatch_overrides', JSON.stringify(ebinderManualOverrides)); }, [ebinderManualOverrides]);
   useEffect(() => {
     if (ebinderStatus?.type !== 'success') return;
     const t = setTimeout(() => setEbinderStatus(null), 5000);
@@ -1648,7 +1648,7 @@ const App: React.FC = () => {
                           <h4 className="text-[10px] font-mono text-orange-600 tracking-tight mt-0.5 truncate">{batchInfo.batchId}</h4>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        {ebinderData && view === 'main' && (
+                        {view === 'main' && (
                           <button
                             onClick={() => setShowAvailabilityPanel(p => !p)}
                             className={`text-[9px] font-black px-3 py-1.5 rounded-lg transition-all ${showAvailabilityPanel ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
@@ -1675,7 +1675,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
               </div>
-              {showAvailabilityPanel && ebinderData && view === 'main' && (
+              {showAvailabilityPanel && view === 'main' && (
                 <AvailabilityPanel
                   ebinderData={ebinderData}
                   offDriverIds={offDriverIdsFinal}
