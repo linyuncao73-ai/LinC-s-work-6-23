@@ -2,8 +2,8 @@ import { RouteData, BatchInfo, DriverRegistry, EbinderData } from "../types";
 
 // Filled in once the team's Supabase project details are provided.
 // The publishable (anon) key is safe to ship in frontend code when RLS is on.
-const SUPABASE_URL = '';
-const SUPABASE_ANON_KEY = '';
+const SUPABASE_URL = 'https://cwsgulevgcwgcerudnjr.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3c2d1bGV2Z2N3Z2NlcnVkbmpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNDQ2NjgsImV4cCI6MjA5NjcyMDY2OH0.O3a0tZF1Y2ikuoNUoyNIS1_qTbw__5MCHmzNuT9L4Do';
 
 const SNAPSHOT_ID = 'yow-main';
 
