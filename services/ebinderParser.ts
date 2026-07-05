@@ -22,55 +22,40 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
   const prompt = `
     You are analyzing a weekly driver scheduling spreadsheet called "e-binder".
 
-    THE SINGLE MOST IMPORTANT RULE: A RED (or pink) BACKGROUND on a date cell
-    means that driver DOES NOT WORK that day. Scan every driver row's date
-    cells for red backgrounds carefully — a red cell with no text is still OFF.
+    Business context: a RED (or pink) BACKGROUND on a date cell is the driver's
+    FIXED weekly day off — the company wipes all text from the sheet every week,
+    but the red backgrounds stay. So a red cell usually has NO text at all, and
+    it always means the driver does not work that day. Text markers like
+    "7.6 off" are additional one-time leave notes.
 
     The spreadsheet structure:
     - Column B: Driver ID (numeric only, e.g. 19492, 4574, 3261)
     - Column C: Driver name (e.g. Fath, Sijiang, Sam)
     - Column D: Notes or preferred routes (ignore)
     - Column E: MAX parcel capacity (numeric, e.g. 300, 250, 200, 150). Use null if empty or "N/A".
-    - Remaining columns: date headers like "6-29", "6-30", "7-1", "7-2", "7-3", "7-4", "7-5"
+    - Remaining columns: date headers like "7-6", "7-7", "7-8", "7-9", "7-10", "7-11", "7-12"
 
     Your task:
-    1. Find all date column headers (like "6-29", "7-5" etc.) and list them as weekDates.
+    1. Find all date column headers and list them as weekDates, left to right.
     2. For each driver row where Column B has a numeric ID, extract:
        - driverId (Column B, numbers only as string)
        - driverName (Column C)
        - maxCapacity (Column E as number, or null)
-       - offDays: the dates this driver is OFF, each with the evidence you saw.
+       - dayColors: walk that driver's date cells LEFT TO RIGHT and classify the
+         BACKGROUND COLOR of every single cell. Output exactly ONE entry per
+         weekDate, in the same order as weekDates:
+           "red"   — the cell background is red or pink (with or without text)
+           "green" — anything else (green, empty, white, or a text note)
+         Do NOT skip any cell. dayColors.length must equal weekDates.length.
+       - offTextDates: dates whose cell contains off text such as "off", "OFF",
+         "of" (typo), "休", "7.6 off", "0706 off" (4-digit MMDD). Convert each to
+         the column header date (e.g. "7.6 off" -> "7-6"). Empty array if none.
+         Route notes like "Route 1.1" are NOT off text — ignore them.
 
-    THE DEFAULT IS WORKING. A light green or empty date cell ALWAYS means the driver
-    works that day. Most drivers work the entire week — being off is the exception.
-    Only report a date in offDays when you can see explicit evidence IN THAT DRIVER'S
-    OWN ROW:
-    - The cell has a solid RED or PINK background (with or without text), OR
-    - The cell contains off text: "off", "OFF", "of" (typo), "休", "7.5 off",
-      "0705 off" (4-digit MMDD), "6.23 off", etc.
-    - A cell can be BOTH red AND contain text (e.g. a red cell with "7.5 off") —
-      it is OFF; report the text as evidence.
-    - When a row has some red cells and some green cells, each red-cell column is
-      OFF and each green-cell column is WORKING — check every column one by one,
-      do not stop after finding the first off marker in a row.
-
-    For each offDays entry output:
-    - date: the column header date (e.g. "7-5")
-    - evidence: exactly what you saw — the cell's text (e.g. "0705 off"),
-      or "red cell" if the cell is red/pink with no text.
-
-    CRITICAL — avoid these mistakes:
-    - Process ONE ROW AT A TIME. A red cell in one driver's row must NEVER cause a
-      neighboring row's driver to be marked off. Before adding an offDays entry,
-      re-check that the red cell or off text is on the same horizontal row as that
-      driver's ID.
-    - Route notes are NOT off markers: text like "Route 1.1" or a preferred-route
-      note in a green cell means the driver WORKS that day.
-    - If the ENTIRE row of date cells is red, include every weekDate in offDays
-      with evidence "red cell".
-
-    IMPORTANT:
-    - Skip any row that doesn't have a numeric driver ID in Column B (skip headers, totals, empty rows).
+    CRITICAL:
+    - Classify each row independently: a red cell in one driver's row must never affect
+      the row above or below it. Stay on the same horizontal row as the driver ID.
+    - Skip any row that doesn't have a numeric driver ID in Column B (headers, totals, empty rows).
     - Keep drivers in the SAME order as the rows appear in the spreadsheet (top to bottom).
   `;
 
@@ -95,19 +80,18 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
                 driverId:    { type: Type.STRING },
                 driverName:  { type: Type.STRING },
                 maxCapacity: { type: Type.NUMBER },
-                offDays: {
+                dayColors: {
                   type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      date:     { type: Type.STRING, description: "Column header date, e.g. '7-5'" },
-                      evidence: { type: Type.STRING, description: "Cell text seen, or 'red cell' for a red/pink cell with no text" }
-                    },
-                    required: ["date", "evidence"]
-                  }
+                  items: { type: Type.STRING, enum: ["red", "green"] },
+                  description: "One background-color classification per weekDate, in weekDates order. Length must equal weekDates length."
+                },
+                offTextDates: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "Column header dates whose cell contains off text, e.g. ['7-6']. Empty if none."
                 }
               },
-              required: ["driverId", "driverName", "offDays"]
+              required: ["driverId", "driverName", "dayColors"]
             }
           }
         },
@@ -118,28 +102,35 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
 
   const raw = JSON.parse(response.text || "{}");
 
-  // Only trust off entries whose evidence is an actual off marker; this drops
-  // hallucinated entries and notes like "Route 1.1" that slipped through.
-  const isOffEvidence = (ev: string) => /red|pink|\boff?\b|休/i.test(ev);
+  const weekDates: string[] = Array.isArray(raw.weekDates) ? raw.weekDates.map(String) : [];
 
   const drivers: EbinderDriverRow[] = (raw.drivers || [])
     .filter((d: any) => /^\d+$/.test(String(d.driverId || '').trim()))
-    .map((d: any) => ({
-      driverId:    String(d.driverId).trim(),
-      driverName:  String(d.driverName || ''),
-      maxCapacity: typeof d.maxCapacity === 'number' && d.maxCapacity > 0 ? d.maxCapacity : null,
-      offDates:    Array.isArray(d.offDays)
-        ? d.offDays
-            .filter((o: any) => o && isOffEvidence(String(o.evidence || '')))
-            .map((o: any) => {
-              const norm = normalizeEbinderDate(String(o.date));
-              return norm ? `${norm.m}-${norm.d}` : '';
-            })
-            .filter((s: string) => s !== '')
-        : []
-    }));
-
-  const weekDates = Array.isArray(raw.weekDates) ? raw.weekDates.map(String) : [];
+    .map((d: any) => {
+      const offDates = new Set<string>();
+      // Red cells: one classification per date column, aligned with weekDates
+      const colors: string[] = Array.isArray(d.dayColors) ? d.dayColors : [];
+      const len = Math.min(colors.length, weekDates.length);
+      for (let i = 0; i < len; i++) {
+        if (String(colors[i]).toLowerCase() === 'red') {
+          const norm = normalizeEbinderDate(weekDates[i]);
+          if (norm) offDates.add(`${norm.m}-${norm.d}`);
+        }
+      }
+      // One-time leave written as text, e.g. "7.6 off"
+      if (Array.isArray(d.offTextDates)) {
+        for (const s of d.offTextDates) {
+          const norm = normalizeEbinderDate(String(s));
+          if (norm) offDates.add(`${norm.m}-${norm.d}`);
+        }
+      }
+      return {
+        driverId:    String(d.driverId).trim(),
+        driverName:  String(d.driverName || ''),
+        maxCapacity: typeof d.maxCapacity === 'number' && d.maxCapacity > 0 ? d.maxCapacity : null,
+        offDates:    [...offDates],
+      };
+    });
 
   if (weekDates.length === 0) {
     throw new Error('未能识别任何日期列（如"6-22"、"6-23"）。请确认上传的是 e-binder 班表截图，且截图包含完整列标题行。');
