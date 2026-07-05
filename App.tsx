@@ -1529,7 +1529,7 @@ const App: React.FC = () => {
                           <p className="text-[10px] font-black uppercase text-slate-400">Dispatch Settings</p>
                           <h4 className="text-[10px] font-mono text-orange-600 tracking-tight mt-0.5 truncate">{batchInfo.batchId}</h4>
                       </div>
-                      {ebinderData && (
+                      {ebinderData && view === 'main' && (
                         <button
                           onClick={() => setShowAvailabilityPanel(p => !p)}
                           className={`text-[9px] font-black px-3 py-1.5 rounded-lg transition-all ${showAvailabilityPanel ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
@@ -1540,7 +1540,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
               </div>
-              {showAvailabilityPanel && ebinderData && (
+              {showAvailabilityPanel && ebinderData && view === 'main' && (
                 <AvailabilityPanel
                   ebinderData={ebinderData}
                   offDriverIds={offDriverIdsFinal}

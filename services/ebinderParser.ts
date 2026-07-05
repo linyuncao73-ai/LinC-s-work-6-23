@@ -22,6 +22,10 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
   const prompt = `
     You are analyzing a weekly driver scheduling spreadsheet called "e-binder".
 
+    THE SINGLE MOST IMPORTANT RULE: A RED (or pink) BACKGROUND on a date cell
+    means that driver DOES NOT WORK that day. Scan every driver row's date
+    cells for red backgrounds carefully — a red cell with no text is still OFF.
+
     The spreadsheet structure:
     - Column B: Driver ID (numeric only, e.g. 19492, 4574, 3261)
     - Column C: Driver name (e.g. Fath, Sijiang, Sam)
