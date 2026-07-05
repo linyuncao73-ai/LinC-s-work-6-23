@@ -36,35 +36,46 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
   const imagePart = await fileToGenerativePart(file);
 
   const prompt = `
-    Extract driver dispatch data from this screenshot of a UniUni dashboard.
-    
+    Extract driver dispatch data from this screenshot of a UniUni dashboard ("YOW 取货表").
+
     1. Look for global metadata at the top:
-       - "发货日期" (Dispatch Date) -> extract as date (e.g., 2026-02-02)
-       - "发货批次" (Batch ID) -> extract as batchId (e.g., OSUB-202601312218)
-    
-    2. Extract the table data. Mapping:
-       - "路线号" (Route #) -> routeNum
-       - "预派发规则" (Allocation Rules) -> allocationString
-       - "扫单号" (Scan ID) -> scanId
+       - "发货日期" (Dispatch Date) -> extract as date (e.g., 2026-07-03)
+       - "发货批次" (Batch ID) -> extract as batchId (e.g., OSUB-202607012041)
+
+    2. Extract the table. For each row:
+       - "路线号" (Route #) -> routeNum (e.g., 33011)
        - "货量" (Volume) -> totalVolume
-       - "时间" (Time) -> timeSlot
-    
-    CRITICAL INSTRUCTIONS:
-    - "预派发规则" contains driver assignments like "1-22(20255), 23-50(15167)".
-    - Route numbers start with '33' (e.g., 33055).
-    - If you see placeholders like "33011-4-1" inside parentheses in the allocation column, extract it.
-    - If "时间" (Time) is visible, extract it. If not, don't guess.
-    
-    Return a JSON object with:
-    - batchId (string)
-    - date (string)
-    - rows (array of route objects)
+       - "扫单号" (Scan ID) -> scanId
+       - "预派发规则" (Allocation Rules) -> parse into the segments array (see below)
+       - "时间" (Time) -> timeSlot only if visible; don't guess.
+
+    THE MOST IMPORTANT COLUMN is "预派发规则". It contains comma-separated
+    segments of the form "START-END(SUB_ROUTE)". You must parse EVERY segment
+    into the segments array.
+
+    Example: the cell "1-157(33011-2-1),158-288(33011-2-2)" becomes
+      segments: [
+        { "start": 1,   "end": 157, "subRoute": "33011-2-1" },
+        { "start": 158, "end": 288, "subRoute": "33011-2-2" }
+      ]
+
+    Rules for segments:
+    - subRoute is the COMPLETE text inside the parentheses, e.g. "33011-2-1"
+      or "33022-4-3". Never shorten it.
+    - The cell text often WRAPS ACROSS MULTIPLE LINES — read the whole cell
+      and capture every segment before moving to the next row.
+    - Self-check: the number of segments must equal the "拆分份数" (split
+      count) column of the same row. If they don't match, re-read the cell.
+
+    Return a JSON object with batchId (string), date (string),
+    and rows (array of route objects with routeNum, totalVolume, scanId, segments).
   `;
 
   const response: GenerateContentResponse = await generateWithRetry(ai, {
     contents: { parts: [imagePart, { text: prompt }] },
     config: {
       responseMimeType: "application/json",
+      temperature: 0,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -77,11 +88,23 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
               properties: {
                 routeNum: { type: Type.STRING },
                 totalVolume: { type: Type.NUMBER },
-                allocationString: { type: Type.STRING },
+                segments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      start:    { type: Type.NUMBER, description: "Segment range start, e.g. 1" },
+                      end:      { type: Type.NUMBER, description: "Segment range end, e.g. 157" },
+                      subRoute: { type: Type.STRING, description: "Complete text inside the parentheses, e.g. '33011-2-1'" }
+                    },
+                    required: ["start", "end", "subRoute"]
+                  }
+                },
+                allocationString: { type: Type.STRING, description: "Backup: the raw 预派发规则 cell text" },
                 scanId: { type: Type.STRING },
                 timeSlot: { type: Type.STRING },
               },
-              required: ["routeNum", "allocationString", "totalVolume"]
+              required: ["routeNum", "totalVolume", "segments"]
             }
           }
         },
@@ -106,7 +129,14 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
     if (!/^33\d{3}/.test(baseRoute)) return;
 
     totalVolumeAccumulated += (item.totalVolume || 0);
-    const segments = parseAllocationSegments(item.allocationString || '');
+    // Prefer the structured segments from the model; fall back to regex-parsing
+    // the raw cell text if they're missing or malformed.
+    const structured = Array.isArray(item.segments)
+      ? item.segments
+          .filter((s: any) => typeof s?.start === 'number' && typeof s?.end === 'number' && String(s?.subRoute || '').trim() !== '')
+          .map((s: any) => ({ start: s.start, end: s.end, ident: String(s.subRoute).trim() }))
+      : [];
+    const segments = structured.length > 0 ? structured : parseAllocationSegments(item.allocationString || '');
 
     // Fallback time slot based on baseRoute and dynamic date mechanism
     const defaultTime = getDefaultTimeSlot(baseRoute, displayDate);
