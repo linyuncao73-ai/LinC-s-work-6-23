@@ -15,6 +15,40 @@ async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: s
   });
 }
 
+interface PixelImage { data: Uint8ClampedArray; width: number; height: number }
+
+async function fileToImageData(file: File): Promise<PixelImage | null> {
+  try {
+    const bmp = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bmp, 0, 0);
+    const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
+    return { data: img.data, width: img.width, height: img.height };
+  } catch {
+    return null;
+  }
+}
+
+/** Averages a 7x7 patch around (cx, cy) and decides if it's a red/pink cell. */
+function isRedAt(img: PixelImage, cx: number, cy: number): boolean {
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      const x = Math.min(img.width - 1, Math.max(0, Math.round(cx + dx)));
+      const y = Math.min(img.height - 1, Math.max(0, Math.round(cy + dy)));
+      const i = (y * img.width + x) * 4;
+      r += img.data[i]; g += img.data[i + 1]; b += img.data[i + 2]; n++;
+    }
+  }
+  r /= n; g /= n; b /= n;
+  // Sheet red is vivid (#FF0000-ish); green data cells are #B6D7A8-ish.
+  return r > 150 && r - g > 50 && r - b > 50;
+}
+
 export async function parseEbinderImage(file: File): Promise<EbinderData> {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const imagePart = await fileToGenerativePart(file);
@@ -35,26 +69,32 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     - Column E: MAX parcel capacity (numeric, e.g. 300, 250, 200, 150). Use null if empty or "N/A".
     - Remaining columns: date headers like "7-6", "7-7", "7-8", "7-9", "7-10", "7-11", "7-12"
 
+    COORDINATES: all coordinates are normalized to 0-1000 relative to the full
+    image (x: left edge = 0, right edge = 1000; y: top = 0, bottom = 1000).
+
     Your task:
-    1. Find all date column headers and list them as weekDates, left to right.
+    1. Find all date column headers, left to right. For each output:
+       - date: the header text (e.g. "7-6")
+       - xmin / xmax: the horizontal span of that column (normalized 0-1000)
     2. For each driver row where Column B has a numeric ID, extract:
        - driverId (Column B, numbers only as string)
        - driverName (Column C)
        - maxCapacity (Column E as number, or null)
+       - ymin / ymax: the vertical span of that driver's own row (normalized
+         0-1000) — measure the row band of the cell containing the driver ID.
        - dayColors: walk that driver's date cells LEFT TO RIGHT and classify the
          BACKGROUND COLOR of every single cell. Output exactly ONE entry per
-         weekDate, in the same order as weekDates:
+         date column, in the same order:
            "red"   — the cell background is red or pink (with or without text)
            "green" — anything else (green, empty, white, or a text note)
-         Do NOT skip any cell. dayColors.length must equal weekDates.length.
        - offTextDates: dates whose cell contains off text such as "off", "OFF",
          "of" (typo), "休", "7.6 off", "0706 off" (4-digit MMDD). Convert each to
          the column header date (e.g. "7.6 off" -> "7-6"). Empty array if none.
          Route notes like "Route 1.1" are NOT off text — ignore them.
 
     CRITICAL:
-    - Classify each row independently: a red cell in one driver's row must never affect
-      the row above or below it. Stay on the same horizontal row as the driver ID.
+    - ymin/ymax must be accurate: they are used to locate each driver's row.
+      Adjacent rows must not overlap.
     - Skip any row that doesn't have a numeric driver ID in Column B (headers, totals, empty rows).
     - Keep drivers in the SAME order as the rows appear in the spreadsheet (top to bottom).
   `;
@@ -69,8 +109,16 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
         properties: {
           weekDates: {
             type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Date column headers found, e.g. ['6-29','6-30','7-1','7-2','7-3','7-4','7-5']"
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                date: { type: Type.STRING, description: "Header text, e.g. '7-6'" },
+                xmin: { type: Type.NUMBER, description: "Left edge of the column, normalized 0-1000" },
+                xmax: { type: Type.NUMBER, description: "Right edge of the column, normalized 0-1000" }
+              },
+              required: ["date", "xmin", "xmax"]
+            },
+            description: "Date column headers left to right with their horizontal spans"
           },
           drivers: {
             type: Type.ARRAY,
@@ -80,10 +128,12 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
                 driverId:    { type: Type.STRING },
                 driverName:  { type: Type.STRING },
                 maxCapacity: { type: Type.NUMBER },
+                ymin: { type: Type.NUMBER, description: "Top edge of this driver's row, normalized 0-1000" },
+                ymax: { type: Type.NUMBER, description: "Bottom edge of this driver's row, normalized 0-1000" },
                 dayColors: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING, enum: ["red", "green"] },
-                  description: "One background-color classification per weekDate, in weekDates order. Length must equal weekDates length."
+                  description: "One background-color classification per date column, in order"
                 },
                 offTextDates: {
                   type: Type.ARRAY,
@@ -91,7 +141,7 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
                   description: "Column header dates whose cell contains off text, e.g. ['7-6']. Empty if none."
                 }
               },
-              required: ["driverId", "driverName", "dayColors"]
+              required: ["driverId", "driverName", "ymin", "ymax", "dayColors"]
             }
           }
         },
@@ -102,18 +152,40 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
 
   const raw = JSON.parse(response.text || "{}");
 
-  const weekDates: string[] = Array.isArray(raw.weekDates) ? raw.weekDates.map(String) : [];
+  const weekCols: { date: string; xmin: number; xmax: number }[] = Array.isArray(raw.weekDates)
+    ? raw.weekDates
+        .map((w: any) => (typeof w === 'string'
+          ? { date: w, xmin: NaN, xmax: NaN }
+          : { date: String(w?.date || ''), xmin: Number(w?.xmin), xmax: Number(w?.xmax) }))
+        .filter((w: any) => w.date !== '')
+    : [];
+  const weekDates: string[] = weekCols.map(w => w.date);
+
+  // Red detection is done by sampling the actual pixels: the model only
+  // locates rows/columns, so a red block spanning two driver rows can't be
+  // attributed to just one of them. Model dayColors remain the fallback.
+  const img = await fileToImageData(file);
+  const colValid = (w: { xmin: number; xmax: number }) => Number.isFinite(w.xmin) && Number.isFinite(w.xmax) && w.xmax > w.xmin;
 
   const drivers: EbinderDriverRow[] = (raw.drivers || [])
     .filter((d: any) => /^\d+$/.test(String(d.driverId || '').trim()))
     .map((d: any) => {
       const offDates = new Set<string>();
-      // Red cells: one classification per date column, aligned with weekDates
-      const colors: string[] = Array.isArray(d.dayColors) ? d.dayColors : [];
-      const len = Math.min(colors.length, weekDates.length);
-      for (let i = 0; i < len; i++) {
-        if (String(colors[i]).toLowerCase() === 'red') {
-          const norm = normalizeEbinderDate(weekDates[i]);
+      const rowValid = img && Number.isFinite(Number(d.ymin)) && Number.isFinite(Number(d.ymax)) && Number(d.ymax) > Number(d.ymin);
+      const modelColors: string[] = Array.isArray(d.dayColors) ? d.dayColors : [];
+
+      for (let i = 0; i < weekCols.length; i++) {
+        const col = weekCols[i];
+        let red: boolean;
+        if (rowValid && colValid(col)) {
+          const cx = ((col.xmin + col.xmax) / 2 / 1000) * img!.width;
+          const cy = ((Number(d.ymin) + Number(d.ymax)) / 2 / 1000) * img!.height;
+          red = isRedAt(img!, cx, cy);
+        } else {
+          red = String(modelColors[i] || '').toLowerCase() === 'red';
+        }
+        if (red) {
+          const norm = normalizeEbinderDate(col.date);
           if (norm) offDates.add(`${norm.m}-${norm.d}`);
         }
       }
