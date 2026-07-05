@@ -5,6 +5,7 @@ import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
 import { RouteData, AgencyGroup, AGENCIES, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
+import { saveSnapshot, loadSnapshot, DispatchSnapshot } from './services/cloudSync';
 import html2canvas from 'html2canvas';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
@@ -1087,6 +1088,8 @@ const App: React.FC = () => {
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(() => !!getStoredApiKey());
+  const [cloudStatus, setCloudStatus] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   // 排班目标日：始终为明天（今天排的是明天的班）
   const dispatchDate = useMemo(() => getOttawaTomorrowDateString(), []);
@@ -1120,6 +1123,92 @@ const App: React.FC = () => {
     const t = setTimeout(() => setEbinderStatus(null), 5000);
     return () => clearTimeout(t);
   }, [ebinderStatus]);
+  useEffect(() => {
+    if (cloudStatus?.type !== 'success') return;
+    const t = setTimeout(() => setCloudStatus(null), 5000);
+    return () => clearTimeout(t);
+  }, [cloudStatus]);
+
+  const buildSnapshot = (): DispatchSnapshot => ({
+    routes,
+    batchInfo,
+    registry,
+    ebinderData,
+    ebinderManualOverrides,
+    savedAt: new Date().toISOString(),
+  });
+
+  const applySnapshot = (snap: DispatchSnapshot) => {
+    if (!snap || !Array.isArray(snap.routes)) throw new Error('数据格式不对，缺少 routes');
+    setRoutes(snap.routes);
+    if (snap.batchInfo) setBatchInfo(snap.batchInfo);
+    if (snap.registry) setRegistry(snap.registry);
+    setEbinderData(snap.ebinderData ?? null);
+    setEbinderManualOverrides(snap.ebinderManualOverrides || {});
+    if (snap.routes.length > 0) { setHasStarted(true); setView('main'); }
+  };
+
+  const formatSavedTime = (iso: string) => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
+    } catch { return iso; }
+  };
+
+  const handleCloudSave = async () => {
+    setCloudStatus({ type: 'loading', message: '正在保存到云端…' });
+    try {
+      await saveSnapshot(buildSnapshot());
+      setCloudStatus({ type: 'success', message: `已保存到云端 · ${formatSavedTime(new Date().toISOString())}` });
+    } catch (err: any) {
+      setCloudStatus({ type: 'error', message: err.message || '保存失败，请重试' });
+    }
+  };
+
+  const handleCloudLoad = async () => {
+    setCloudStatus({ type: 'loading', message: '正在从云端加载…' });
+    try {
+      const result = await loadSnapshot();
+      if (!result) {
+        setCloudStatus({ type: 'error', message: '云端还没有保存过数据。先点云上传按钮保存一次。' });
+        return;
+      }
+      if (!window.confirm(`用云端数据（${formatSavedTime(result.updatedAt)} 保存）覆盖当前表格？`)) {
+        setCloudStatus(null);
+        return;
+      }
+      applySnapshot(result.data);
+      setCloudStatus({ type: 'success', message: `已加载云端数据（${formatSavedTime(result.updatedAt)} 保存）` });
+    } catch (err: any) {
+      setCloudStatus({ type: 'error', message: err.message || '加载失败，请重试' });
+    }
+  };
+
+  const handleExportFile = () => {
+    const snap = buildSnapshot();
+    const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    a.download = `yow-dispatch-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    try {
+      const text = await file.text();
+      const snap = JSON.parse(text);
+      if (!Array.isArray(snap?.routes)) throw new Error('这不是本应用导出的数据文件（缺少 routes）');
+      if (!window.confirm(`用文件数据（${snap.routes.length} 条路线）覆盖当前表格？`)) return;
+      applySnapshot(snap);
+      setCloudStatus({ type: 'success', message: '已从文件导入数据' });
+    } catch (err: any) {
+      setCloudStatus({ type: 'error', message: err.message || '文件读取失败' });
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   const handleEbinderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -1444,6 +1533,20 @@ const App: React.FC = () => {
                   ))}
               </nav>
               <button
+                onClick={handleCloudSave}
+                title="保存到云端（同事可在其他电脑加载）"
+                className="w-10 h-10 rounded-xl flex items-center justify-center bg-blue-50 text-blue-500 hover:bg-blue-100 transition-all"
+              >
+                <i className="fa-solid fa-cloud-arrow-up text-sm"></i>
+              </button>
+              <button
+                onClick={handleCloudLoad}
+                title="从云端加载最新保存的数据"
+                className="w-10 h-10 rounded-xl flex items-center justify-center bg-blue-50 text-blue-500 hover:bg-blue-100 transition-all"
+              >
+                <i className="fa-solid fa-cloud-arrow-down text-sm"></i>
+              </button>
+              <button
                 onClick={() => setShowApiKeyModal(true)}
                 title={hasApiKey ? 'API Key 已设置' : '设置 Gemini API Key'}
                 className={`relative w-10 h-10 rounded-xl flex items-center justify-center transition-all ${hasApiKey ? 'bg-slate-100 text-slate-400 hover:text-slate-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
@@ -1453,6 +1556,21 @@ const App: React.FC = () => {
               </button>
             </div>
         </header>
+        {cloudStatus && (
+          <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[90] px-5 py-2.5 rounded-2xl text-xs flex items-center gap-2 shadow-lg border ${
+            cloudStatus.type === 'loading' ? 'bg-blue-50 text-blue-700 border-blue-100'
+            : cloudStatus.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+            : 'bg-red-50 text-red-700 border-red-100'
+          }`}>
+            {cloudStatus.type === 'loading' && <i className="fa-solid fa-spinner animate-spin text-xs"></i>}
+            {cloudStatus.type === 'success' && <i className="fa-solid fa-circle-check text-xs"></i>}
+            {cloudStatus.type === 'error' && <i className="fa-solid fa-circle-xmark text-xs"></i>}
+            <span className="font-medium">{cloudStatus.message}</span>
+            {cloudStatus.type !== 'loading' && (
+              <button onClick={() => setCloudStatus(null)} className="ml-2 opacity-50 hover:opacity-100 text-base leading-none">✕</button>
+            )}
+          </div>
+        )}
 
         <main className="max-w-7xl mx-auto px-8 mt-10">
             {/* Action Bar (Uploads & Stats) */}
@@ -1529,14 +1647,31 @@ const App: React.FC = () => {
                           <p className="text-[10px] font-black uppercase text-slate-400">Dispatch Settings</p>
                           <h4 className="text-[10px] font-mono text-orange-600 tracking-tight mt-0.5 truncate">{batchInfo.batchId}</h4>
                       </div>
-                      {ebinderData && view === 'main' && (
+                      <div className="flex items-center gap-1.5">
+                        {ebinderData && view === 'main' && (
+                          <button
+                            onClick={() => setShowAvailabilityPanel(p => !p)}
+                            className={`text-[9px] font-black px-3 py-1.5 rounded-lg transition-all ${showAvailabilityPanel ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                          >
+                            {showAvailabilityPanel ? 'Hide Availability' : 'View Availability'}
+                          </button>
+                        )}
                         <button
-                          onClick={() => setShowAvailabilityPanel(p => !p)}
-                          className={`text-[9px] font-black px-3 py-1.5 rounded-lg transition-all ${showAvailabilityPanel ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                          onClick={handleExportFile}
+                          title="导出数据为 JSON 文件"
+                          className="text-[9px] font-black px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all"
                         >
-                          {showAvailabilityPanel ? 'Hide Availability' : 'View Availability'}
+                          <i className="fa-solid fa-file-export"></i>
                         </button>
-                      )}
+                        <button
+                          onClick={() => importFileRef.current?.click()}
+                          title="从 JSON 文件导入数据"
+                          className="text-[9px] font-black px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all"
+                        >
+                          <i className="fa-solid fa-file-import"></i>
+                        </button>
+                        <input type="file" ref={importFileRef} onChange={handleImportFile} className="hidden" accept=".json,application/json" />
+                      </div>
                     </div>
                   </div>
               </div>
