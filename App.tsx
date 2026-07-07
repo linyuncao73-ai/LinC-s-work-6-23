@@ -1,8 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { parseExcelFile } from './services/excelParser';
-import { parseImageFile } from './services/geminiParser';
-import { parseEbinderImage } from './services/ebinderParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
@@ -1404,6 +1402,7 @@ const App: React.FC = () => {
     setEbinderLoading(true);
     setEbinderStatus({ type: 'loading', message: '正在解析文件（模型繁忙时会自动重试，最多约 30 秒）…' });
     try {
+      const { parseEbinderImage } = await import('./services/ebinderParser');
       const data = await parseEbinderImage(file);
       setRegistry(prev => {
         const updated = { ...prev };
@@ -1450,6 +1449,7 @@ const App: React.FC = () => {
     const file = e.target.files?.[0]; if (!file) return;
     setLoading(true);
     try {
+      const { parseImageFile } = await import('./services/geminiParser');
       const data = await parseImageFile(file, registry);
       setRoutes(data.routes);
       setBatchInfo(data.batchInfo);
