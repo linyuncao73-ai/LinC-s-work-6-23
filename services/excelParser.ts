@@ -1,5 +1,4 @@
-import * as XLSX from 'xlsx';
-import { RouteData, BatchInfo, SCAN_ID_MAP, ZONE_NAMES, DriverRegistry, getDefaultTimeSlot, getOttawaTodayDateString } from '../types';
+import { RouteData, BatchInfo, SCAN_ID_MAP, ZONE_NAMES, DriverRegistry, getDefaultTimeSlot, getOttawaTomorrowDateString } from '../types';
 
 /**
  * According to screenshot:
@@ -48,6 +47,7 @@ const parseAllocation = (str: string) => {
 };
 
 export const parseExcelFile = async (file: File, registry: DriverRegistry): Promise<{ routes: RouteData[], batchInfo: BatchInfo }> => {
+  const XLSX = await import('xlsx');
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -62,8 +62,8 @@ export const parseExcelFile = async (file: File, registry: DriverRegistry): Prom
         
         if (!jsonData || jsonData.length === 0) throw new Error("Empty content");
 
-        // Force the date to be the current Ottawa date in MM/DD/YYYY format
-        const date = getOttawaTodayDateString();
+        // Dispatch is prepared the day before: the batch date is tomorrow
+        const date = getOttawaTomorrowDateString();
         
         let batchId = 'OSUB-' + new Date().toISOString().slice(0, 10).replace(/-/g, '');
         let expectedTotalVolume = 0;

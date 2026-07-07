@@ -12,7 +12,7 @@ async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: s
         inlineData: { data: base64Data, mimeType: file.type },
       });
     };
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error('文件读取失败，请重试'));
     reader.readAsDataURL(file);
   });
 }

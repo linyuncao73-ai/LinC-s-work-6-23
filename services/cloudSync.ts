@@ -47,6 +47,18 @@ export async function saveSnapshot(data: DispatchSnapshot): Promise<void> {
   }
 }
 
+/** Cheap check of the cloud snapshot's last-saved time (no data payload). */
+export async function fetchCloudUpdatedAt(): Promise<string | null> {
+  const { url, key } = getConfig();
+  const res = await fetch(
+    `${url}/rest/v1/dispatch_snapshots?id=eq.${SNAPSHOT_ID}&select=updated_at`,
+    { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
+  );
+  if (!res.ok) return null;
+  const rows = await res.json().catch(() => []);
+  return Array.isArray(rows) && rows.length > 0 ? rows[0].updated_at : null;
+}
+
 export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedAt: string } | null> {
   const { url, key } = getConfig();
   const res = await fetch(

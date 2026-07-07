@@ -5,8 +5,7 @@ import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
-import { saveSnapshot, loadSnapshot, DispatchSnapshot } from './services/cloudSync';
-import html2canvas from 'html2canvas';
+import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, DispatchSnapshot } from './services/cloudSync';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
   const [value, setValue] = useState(getStoredApiKey());
@@ -333,6 +332,9 @@ const AvailabilityPanel: React.FC<{
           <p className="text-[10px] text-slate-400 mt-0.5">For tomorrow · {batchDate}{parsedAgo !== null && ` · Parsed ${parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}`}</p>
         </div>
         <div className="flex items-center gap-3">
+          {parsedAgo !== null && parsedAgo > 1440 && (
+            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200" title="上传新的 e-binder 或手动点选司机">E-binder 数据已过时（{Math.round(parsedAgo / 1440)} 天前）</span>
+          )}
           <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
           <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
         </div>
@@ -419,6 +421,7 @@ const PrintView: React.FC<{ routes: RouteData[], batchInfo: BatchInfo }> = ({ ro
 
   const captureCanvas = async () => {
     if (!printRef.current) return null;
+    const html2canvas = (await import('html2canvas')).default;
     return await html2canvas(printRef.current, {
       scale: 3,
       backgroundColor: '#ffffff',
@@ -1072,7 +1075,13 @@ const App: React.FC = () => {
 
   const [ebinderData, setEbinderData] = useState<EbinderData | null>(() => {
     const saved = localStorage.getItem('yow_dispatch_ebinder');
-    try { return saved ? JSON.parse(saved) : null; } catch { return null; }
+    try {
+      const parsed = saved ? JSON.parse(saved) : null;
+      // A stale sheet silently marking last week's offs is worse than none:
+      // drop e-binder data older than 5 days and fall back to manual picking.
+      if (parsed && Date.now() - (parsed.parsedAt || 0) > 5 * 86400000) return null;
+      return parsed;
+    } catch { return null; }
   });
   const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>(() => {
     try {
@@ -1154,11 +1163,26 @@ const App: React.FC = () => {
     } catch { return iso; }
   };
 
+  const markCloudSeen = (iso: string) => {
+    try { localStorage.setItem('yow_cloud_seen', iso); } catch { /* non-fatal */ }
+  };
+
   const handleCloudSave = async () => {
     setCloudStatus({ type: 'loading', message: '正在保存到云端…' });
     try {
+      // Don't blindly clobber a colleague's newer snapshot
+      const cloudUpdatedAt = await fetchCloudUpdatedAt().catch(() => null);
+      const seen = localStorage.getItem('yow_cloud_seen') || '';
+      if (cloudUpdatedAt && cloudUpdatedAt > seen) {
+        const ok = window.confirm(
+          `云端有 ${formatSavedTime(cloudUpdatedAt)} 保存的更新数据（可能是同事保存的）。\n确定要用你当前的表格覆盖它吗？\n建议先点 ☁↓ 加载查看。`
+        );
+        if (!ok) { setCloudStatus(null); return; }
+      }
+      const savedAt = new Date().toISOString();
       await saveSnapshot(buildSnapshot());
-      setCloudStatus({ type: 'success', message: `已保存到云端 · ${formatSavedTime(new Date().toISOString())}` });
+      markCloudSeen(cloudUpdatedAt && cloudUpdatedAt > savedAt ? cloudUpdatedAt : savedAt);
+      setCloudStatus({ type: 'success', message: `已保存到云端 · ${formatSavedTime(savedAt)}` });
     } catch (err: any) {
       setCloudStatus({ type: 'error', message: err.message || '保存失败，请重试' });
     }
@@ -1177,6 +1201,7 @@ const App: React.FC = () => {
         return;
       }
       applySnapshot(result.data);
+      markCloudSeen(result.updatedAt);
       setCloudStatus({ type: 'success', message: `已加载云端数据（${formatSavedTime(result.updatedAt)} 保存）` });
     } catch (err: any) {
       setCloudStatus({ type: 'error', message: err.message || '加载失败，请重试' });
@@ -1249,11 +1274,11 @@ const App: React.FC = () => {
     setLoading(true);
     try {
       const data = await parseExcelFile(file, registry);
-      setRoutes(data.routes); 
+      setRoutes(data.routes);
       setBatchInfo(data.batchInfo);
       setHasStarted(true);
       setView('main');
-    } catch (err: any) { alert(`Error: ${err.message}`); }
+    } catch (err: any) { setCloudStatus({ type: 'error', message: `Excel 导入失败：${err.message || '未知错误'}` }); }
     finally { setLoading(false); e.target.value = ''; }
   };
 
@@ -1262,11 +1287,11 @@ const App: React.FC = () => {
     setLoading(true);
     try {
       const data = await parseImageFile(file, registry);
-      setRoutes(data.routes); 
+      setRoutes(data.routes);
       setBatchInfo(data.batchInfo);
       setHasStarted(true);
       setView('main');
-    } catch (err: any) { alert(`Error: ${err.message}`); }
+    } catch (err: any) { setCloudStatus({ type: 'error', message: `截图导入失败：${err.message || '未知错误'}` }); }
     finally { setLoading(false); e.target.value = ''; }
   };
 
