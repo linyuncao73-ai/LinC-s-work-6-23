@@ -17,7 +17,7 @@ async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: s
   });
 }
 
-const parseAllocationSegments = (str: string) => {
+export const parseAllocationSegments = (str: string) => {
   const segments: { start: number; end: number; ident: string }[] = [];
   const regex = /(\d+)-(\d+)\(([^)]+)\)/g;
   let match;

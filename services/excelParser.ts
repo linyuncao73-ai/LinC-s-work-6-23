@@ -31,7 +31,7 @@ const identifySummaryColumns = (jsonData: any[][]) => {
   return colIdx;
 };
 
-const parseAllocation = (str: string) => {
+export const parseAllocation = (str: string) => {
   const segments: { start: number, end: number, ident: string }[] = [];
   // Updated regex to capture anything inside parentheses as 'ident'
   const regex = /(\d+)-(\d+)\(([^)]+)\)/g;

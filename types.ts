@@ -234,6 +234,8 @@ export interface DriverRegistryEntry {
   name: string;
   group: string;
   maxCapacity?: number;
+  /** Set when the entry was changed in the Drivers screen — UI edits then win over code defaults. */
+  edited?: boolean;
 }
 
 export interface DriverRegistry {

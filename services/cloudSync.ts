@@ -1,4 +1,5 @@
 import { RouteData, BatchInfo, DriverRegistry, EbinderData } from "../types";
+import { encryptJson, decryptJson, isEncryptedPayload } from "./snapshotCrypto";
 
 // Filled in once the team's Supabase project details are provided.
 // The publishable (anon) key is safe to ship in frontend code when RLS is on.
@@ -13,7 +14,22 @@ export interface DispatchSnapshot {
   registry: DriverRegistry;
   ebinderData: EbinderData | null;
   ebinderManualOverrides: Record<string, boolean>;
+  deletedDriverIds?: string[];
   savedAt: string;
+}
+
+const PASSCODE_KEY = 'team_passcode';
+
+export function getTeamPasscode(): string {
+  try { return localStorage.getItem(PASSCODE_KEY) || ''; } catch { return ''; }
+}
+
+export function setTeamPasscode(code: string): void {
+  try {
+    const trimmed = code.trim();
+    if (trimmed) localStorage.setItem(PASSCODE_KEY, trimmed);
+    else localStorage.removeItem(PASSCODE_KEY);
+  } catch { /* non-fatal */ }
 }
 
 function getConfig(): { url: string; key: string } {
@@ -31,6 +47,8 @@ function getConfig(): { url: string; key: string } {
 
 export async function saveSnapshot(data: DispatchSnapshot): Promise<void> {
   const { url, key } = getConfig();
+  const passcode = getTeamPasscode();
+  const body = passcode ? await encryptJson(data, passcode) : data;
   const res = await fetch(`${url}/rest/v1/dispatch_snapshots`, {
     method: 'POST',
     headers: {
@@ -39,7 +57,7 @@ export async function saveSnapshot(data: DispatchSnapshot): Promise<void> {
       'Content-Type': 'application/json',
       'Prefer': 'resolution=merge-duplicates',
     },
-    body: JSON.stringify({ id: SNAPSHOT_ID, data, updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ id: SNAPSHOT_ID, data: body, updated_at: new Date().toISOString() }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -71,5 +89,11 @@ export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedA
   }
   const rows = await res.json();
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  return { data: rows[0].data, updatedAt: rows[0].updated_at };
+  let data = rows[0].data;
+  if (isEncryptedPayload(data)) {
+    const passcode = getTeamPasscode();
+    if (!passcode) throw new Error('云端数据已加密。请先在右上角设置里填入团队口令（需与保存者一致）。');
+    data = await decryptJson(data, passcode);
+  }
+  return { data, updatedAt: rows[0].updated_at };
 }

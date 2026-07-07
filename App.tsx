@@ -5,12 +5,14 @@ import { parseImageFile } from './services/geminiParser';
 import { parseEbinderImage } from './services/ebinderParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
-import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, DispatchSnapshot } from './services/cloudSync';
+import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
   const [value, setValue] = useState(getStoredApiKey());
+  const [passcode, setPasscode] = useState(getTeamPasscode());
   const save = () => {
     setStoredApiKey(value);
+    setTeamPasscode(passcode);
     onSaved(!!value.trim());
     onClose();
   };
@@ -19,20 +21,31 @@ const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) =>
       <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500"><i className="fa-solid fa-key"></i></div>
-          <h3 className="text-lg font-black text-slate-900">Gemini API Key</h3>
+          <h3 className="text-lg font-black text-slate-900">Settings</h3>
         </div>
-        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-          Key 只保存在本机浏览器（localStorage），不会上传到任何服务器。
-          没有 key？去 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">aistudio.google.com/apikey</a> 免费创建。
+        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Gemini API Key</p>
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+          只保存在本机浏览器，不会上传。没有 key？去 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">aistudio.google.com/apikey</a> 免费创建。
         </p>
         <input
           type="password"
           value={value}
           onChange={e => setValue(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') save(); }}
           placeholder="AIza..."
-          className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm font-mono focus:border-amber-400 focus:outline-none mb-4"
+          className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm font-mono focus:border-amber-400 focus:outline-none mb-5"
           autoFocus
+        />
+        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">团队口令（云同步加密）</p>
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+          设置后 ☁ 云端数据会用它加密，只有输入相同口令的人才能读取。团队所有人要填同一个口令。留空 = 不加密。
+        </p>
+        <input
+          type="password"
+          value={passcode}
+          onChange={e => setPasscode(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') save(); }}
+          placeholder="例如 yow2026"
+          className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm font-mono focus:border-amber-400 focus:outline-none mb-4"
         />
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 rounded-xl text-xs font-black bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all">Cancel</button>
@@ -357,6 +370,134 @@ const AvailabilityPanel: React.FC<{
         })}
       </div>
       <p className="text-[9px] text-slate-400 mt-3">Click a driver to manually toggle. Run Auto-Assign to apply changes.</p>
+    </div>
+  );
+};
+
+const DriversView: React.FC<{
+  registry: DriverRegistry;
+  onUpsert: (id: string, entry: { name: string; group: string; maxCapacity?: number }) => void;
+  onDelete: (id: string) => void;
+}> = ({ registry, onUpsert, onDelete }) => {
+  const [search, setSearch] = useState('');
+  const [newId, setNewId] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newGroup, setNewGroup] = useState('Company');
+  const [newMax, setNewMax] = useState('');
+  const groupsOrder = ['Company', ...AGENCIES];
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return Object.entries(registry)
+      .filter(([id, d]) => !q || id.includes(q) || d.name.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const ga = groupsOrder.indexOf(a[1].group);
+        const gb = groupsOrder.indexOf(b[1].group);
+        if (ga !== gb) return (ga === -1 ? 99 : ga) - (gb === -1 ? 99 : gb);
+        return a[0].localeCompare(b[0], undefined, { numeric: true });
+      });
+  }, [registry, search]);
+
+  const addDriver = () => {
+    const id = newId.replace(/\D/g, '');
+    if (!id || !newName.trim()) return;
+    onUpsert(id, { name: newName.trim(), group: newGroup, maxCapacity: newMax ? parseInt(newMax) : undefined });
+    setNewId(''); setNewName(''); setNewMax('');
+  };
+
+  return (
+    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+      <div className="bg-slate-50 border-b border-slate-100 px-8 py-4 flex flex-wrap justify-between items-center gap-4">
+        <div>
+          <h3 className="text-lg font-black text-slate-800">Driver Roster</h3>
+          <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">{Object.keys(registry).length} drivers · 改动自动保存，随 ☁ 云同步共享</p>
+        </div>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="搜索 ID 或名字…"
+          className="px-4 py-2 border-2 border-slate-100 rounded-xl text-xs focus:border-orange-400 focus:outline-none w-48"
+        />
+      </div>
+      <div className="px-8 py-4 bg-orange-50/40 border-b border-slate-100 flex flex-wrap items-end gap-3">
+        <div>
+          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Driver ID</p>
+          <input value={newId} onChange={e => setNewId(e.target.value.replace(/\D/g, ''))} placeholder="12345" className="w-24 px-3 py-2 border-2 border-slate-100 rounded-xl text-xs font-mono focus:border-orange-400 focus:outline-none bg-white" />
+        </div>
+        <div>
+          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Name</p>
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="名字" className="w-32 px-3 py-2 border-2 border-slate-100 rounded-xl text-xs focus:border-orange-400 focus:outline-none bg-white" />
+        </div>
+        <div>
+          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Team</p>
+          <select value={newGroup} onChange={e => setNewGroup(e.target.value)} className="px-3 py-2 border-2 border-slate-100 rounded-xl text-xs font-bold focus:border-orange-400 focus:outline-none bg-white">
+            {groupsOrder.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+        </div>
+        <div>
+          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Max</p>
+          <input value={newMax} onChange={e => setNewMax(e.target.value.replace(/\D/g, ''))} placeholder="300" className="w-20 px-3 py-2 border-2 border-slate-100 rounded-xl text-xs font-mono focus:border-orange-400 focus:outline-none bg-white" />
+        </div>
+        <button onClick={addDriver} disabled={!newId || !newName.trim()} className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 transition-all disabled:opacity-30">
+          <i className="fa-solid fa-plus mr-1"></i>Add Driver
+        </button>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
+            <tr className="text-slate-400 font-black uppercase text-[10px] tracking-widest">
+              <th className="px-8 py-3">ID</th>
+              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3">Team</th>
+              <th className="px-4 py-3">Max Capacity</th>
+              <th className="px-8 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {rows.map(([id, d]) => (
+              <tr key={id} className="hover:bg-slate-50/50">
+                <td className="px-8 py-2.5 font-mono text-xs text-slate-500">{id}</td>
+                <td className="px-4 py-2.5">
+                  <input
+                    value={d.name}
+                    onChange={e => onUpsert(id, { name: e.target.value, group: d.group, maxCapacity: d.maxCapacity })}
+                    className="font-bold text-slate-800 bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none w-36"
+                  />
+                </td>
+                <td className="px-4 py-2.5">
+                  <select
+                    value={d.group}
+                    onChange={e => onUpsert(id, { name: d.name, group: e.target.value, maxCapacity: d.maxCapacity })}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase border cursor-pointer ${getAgencyColor(d.group)}`}
+                  >
+                    {groupsOrder.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </td>
+                <td className="px-4 py-2.5">
+                  <input
+                    value={d.maxCapacity ?? DRIVER_MAX_CAPACITIES[id] ?? ''}
+                    onChange={e => {
+                      const v = e.target.value.replace(/\D/g, '');
+                      onUpsert(id, { name: d.name, group: d.group, maxCapacity: v ? parseInt(v) : undefined });
+                    }}
+                    placeholder="∞"
+                    className="w-16 font-mono text-xs bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none"
+                  />
+                </td>
+                <td className="px-8 py-2.5 text-right">
+                  <button
+                    onClick={() => { if (window.confirm(`删除司机 ${id} ${d.name}？他将从名册和排班选项中消失。`)) onDelete(id); }}
+                    className="p-2 text-slate-300 hover:text-red-500 transition-all"
+                    title="Delete driver"
+                  >
+                    <i className="fa-solid fa-trash-can text-xs"></i>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
@@ -1047,17 +1188,27 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('yow_dispatch_routes');
     return saved ? JSON.parse(saved) : [];
   });
-  const [view, setView] = useState<'main' | 'reports' | 'allocations' | 'print' | 'bookmarks'>('main');
+  const [view, setView] = useState<'main' | 'reports' | 'allocations' | 'print' | 'bookmarks' | 'drivers'>('main');
+  const [deletedDriverIds, setDeletedDriverIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]'); } catch { return []; }
+  });
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
     const saved = localStorage.getItem('yow_dispatch_registry');
-    if (!saved) return INITIAL_DRIVER_REGISTRY;
+    let tombstones: string[] = [];
+    try { tombstones = JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]'); } catch { /* none */ }
+    if (!saved) {
+      const initial = { ...INITIAL_DRIVER_REGISTRY };
+      for (const id of [...REMOVED_DRIVER_IDS, ...tombstones]) delete initial[id];
+      return initial;
+    }
     try {
       const parsed = JSON.parse(saved);
-      // Merge rule: name/group (driver identity) always come from the code
-      // defaults so roster corrections reach existing browsers; runtime
-      // fields like maxCapacity (learned from e-binder) persist from saved.
+      // Merge rule: code defaults win for name/group so roster corrections
+      // reach existing browsers — EXCEPT entries edited in the Drivers screen,
+      // which are user-owned. maxCapacity always persists from saved.
       const merged: DriverRegistry = { ...parsed };
       for (const [id, def] of Object.entries(INITIAL_DRIVER_REGISTRY)) {
+        if (parsed[id]?.edited) continue;
         merged[id] = { ...(parsed[id] || {}), ...def, maxCapacity: parsed[id]?.maxCapacity ?? (def as any).maxCapacity };
       }
       // Purge saved entries whose group no longer exists (e.g. removed broker teams)
@@ -1065,7 +1216,7 @@ const App: React.FC = () => {
       for (const id of Object.keys(merged)) {
         if (!validGroups.has(merged[id].group)) delete merged[id];
       }
-      for (const id of REMOVED_DRIVER_IDS) delete merged[id];
+      for (const id of [...REMOVED_DRIVER_IDS, ...tombstones]) delete merged[id];
       return merged;
     } catch (e) {
       return INITIAL_DRIVER_REGISTRY;
@@ -1127,6 +1278,7 @@ const App: React.FC = () => {
   useEffect(() => localStorage.setItem('yow_dispatch_registry', JSON.stringify(registry)), [registry]);
   useEffect(() => { if (ebinderData) localStorage.setItem('yow_dispatch_ebinder', JSON.stringify(ebinderData)); }, [ebinderData]);
   useEffect(() => { localStorage.setItem('yow_dispatch_overrides', JSON.stringify(ebinderManualOverrides)); }, [ebinderManualOverrides]);
+  useEffect(() => { localStorage.setItem('yow_dispatch_deleted', JSON.stringify(deletedDriverIds)); }, [deletedDriverIds]);
   useEffect(() => {
     if (ebinderStatus?.type !== 'success') return;
     const t = setTimeout(() => setEbinderStatus(null), 5000);
@@ -1144,8 +1296,19 @@ const App: React.FC = () => {
     registry,
     ebinderData,
     ebinderManualOverrides,
+    deletedDriverIds,
     savedAt: new Date().toISOString(),
   });
+
+  const handleUpsertDriver = (id: string, entry: { name: string; group: string; maxCapacity?: number }) => {
+    setRegistry(prev => ({ ...prev, [id]: { ...entry, edited: true } }));
+    setDeletedDriverIds(prev => prev.filter(x => x !== id));
+  };
+
+  const handleDeleteDriver = (id: string) => {
+    setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setDeletedDriverIds(prev => [...new Set([...prev, id])]);
+  };
 
   const applySnapshot = (snap: DispatchSnapshot) => {
     if (!snap || !Array.isArray(snap.routes)) throw new Error('数据格式不对，缺少 routes');
@@ -1154,6 +1317,7 @@ const App: React.FC = () => {
     if (snap.registry) setRegistry(snap.registry);
     setEbinderData(snap.ebinderData ?? null);
     setEbinderManualOverrides(snap.ebinderManualOverrides || {});
+    if (Array.isArray(snap.deletedDriverIds)) setDeletedDriverIds(snap.deletedDriverIds);
     if (snap.routes.length > 0) { setHasStarted(true); setView('main'); }
   };
 
@@ -1550,6 +1714,7 @@ const App: React.FC = () => {
                     { id: 'reports', label: 'Reports' },
                     { id: 'allocations', label: 'Allocations' },
                     { id: 'print', label: 'Print & Copy' },
+                    { id: 'drivers', label: 'Drivers' },
                     { id: 'bookmarks', label: 'Links' }
                   ].map(v => (
                       <button key={v.id} onClick={() => setView(v.id as any)} className={`px-5 py-2 rounded-xl text-xs font-black transition-all ${view === v.id ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
@@ -1723,6 +1888,8 @@ const App: React.FC = () => {
                     {/* Prioritize Bookmarks View regardless of data presence */}
                     {view === 'bookmarks' ? (
                       <BookmarksView />
+                    ) : view === 'drivers' ? (
+                      <DriversView registry={registry} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} />
                     ) : showLanding ? (
                       /* Show the full landing page if on a data-driven view with no data */
                       <div className="py-20 text-center max-w-2xl mx-auto">
