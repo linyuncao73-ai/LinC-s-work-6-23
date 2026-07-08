@@ -83,10 +83,14 @@ const getAgencyColor = (group: string) => {
 
 const SplitModal: React.FC<{
   route: RouteData;
+  teamDrivers: { id: string; name: string }[];
+  agencyFirstDriverIds: Record<string, string>;
   onClose: () => void;
-  onConfirm: (firstVolume: number, brokerAgency: string | null) => void;
-}> = ({ route, onClose, onConfirm }) => {
+  onConfirm: (firstVolume: number, secondDriverId: string | null) => void;
+}> = ({ route, teamDrivers, agencyFirstDriverIds, onClose, onConfirm }) => {
   const isCapacitySplit = route.capacityStatus === 'split-recommended' && (route.capacityExcess ?? 0) > 0;
+  // Broker routes split within the same team: one step, pick the driver ID directly.
+  const isBrokerRoute = AGENCIES.includes(route.driverGroup || '');
   const smartDefault = Math.min(
     route.orderVolume - 1,
     Math.max(1, isCapacitySplit
@@ -96,6 +100,7 @@ const SplitModal: React.FC<{
   );
   const [splitVal, setSplitVal] = useState<number>(smartDefault);
   const [step, setStep] = useState<'volume' | 'broker'>('volume');
+  const [manualId, setManualId] = useState('');
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
@@ -137,20 +142,58 @@ const SplitModal: React.FC<{
               </div>
               <div className="grid grid-cols-2 gap-3 text-center">
                 <div className="bg-blue-50 p-3 rounded-xl">
-                  <p className="text-[9px] font-black text-blue-400 uppercase">Part 1 (Driver)</p>
+                  <p className="text-[9px] font-black text-blue-400 uppercase">Part 1 (Keeps)</p>
                   <p className="text-xl font-black text-blue-700">{splitVal}</p>
                 </div>
                 <div className="bg-orange-50 p-3 rounded-xl">
-                  <p className="text-[9px] font-black text-orange-400 uppercase">Part 2 (Broker)</p>
+                  <p className="text-[9px] font-black text-orange-400 uppercase">Part 2 (Cut)</p>
                   <p className="text-xl font-black text-orange-700">{route.orderVolume - splitVal}</p>
                 </div>
               </div>
+              {isBrokerRoute && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase">Part 2 driver · Team {route.driverGroup} — 点司机号直接完成拆分</p>
+                  <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                    {teamDrivers.filter(d => d.id !== route.driverId).map(d => (
+                      <button
+                        key={d.id}
+                        onClick={() => onConfirm(splitVal, d.id)}
+                        className="py-2.5 px-2 rounded-xl text-xs font-black font-mono border border-slate-200 text-slate-700 hover:border-orange-400 hover:bg-orange-50 transition-all"
+                      >
+                        {d.id}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={manualId}
+                      onChange={e => setManualId(e.target.value.replace(/\D/g, ''))}
+                      onKeyDown={e => { if (e.key === 'Enter' && manualId) onConfirm(splitVal, manualId); }}
+                      placeholder="或手输司机号"
+                      className="flex-1 px-4 py-2.5 border-2 border-slate-100 rounded-xl text-xs font-mono focus:border-orange-400 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => onConfirm(splitVal, manualId)}
+                      disabled={!manualId}
+                      className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 transition-all disabled:opacity-30"
+                    >
+                      OK
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="p-8 bg-slate-50 grid grid-cols-2 gap-4">
               <button onClick={onClose} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">Cancel</button>
-              <button onClick={() => setStep('broker')} className="px-6 py-4 rounded-2xl bg-slate-900 text-white font-black text-xs hover:bg-slate-800 transition-all shadow-lg shadow-slate-200">
-                Next: Pick Broker →
-              </button>
+              {isBrokerRoute ? (
+                <button onClick={() => onConfirm(splitVal, null)} className="px-6 py-4 rounded-2xl font-black text-xs border border-slate-200 text-slate-500 hover:bg-slate-100 transition-all">
+                  Split · Part 2 留空
+                </button>
+              ) : (
+                <button onClick={() => setStep('broker')} className="px-6 py-4 rounded-2xl bg-slate-900 text-white font-black text-xs hover:bg-slate-800 transition-all shadow-lg shadow-slate-200">
+                  Next: Pick Broker →
+                </button>
+              )}
             </div>
           </>
         ) : (
@@ -165,7 +208,7 @@ const SplitModal: React.FC<{
                 {AGENCIES.map(agency => (
                   <button
                     key={agency}
-                    onClick={() => onConfirm(splitVal, agency)}
+                    onClick={() => onConfirm(splitVal, agencyFirstDriverIds[agency] || null)}
                     className={`py-3 px-2 rounded-2xl text-xs font-black border transition-all hover:shadow-md ${getAgencyColor(agency)}`}
                   >
                     {agency}
@@ -941,7 +984,21 @@ const MainEditor: React.FC<{
     onOpenSplit: (route: RouteData) => void,
     onOpenReassign: (route: RouteData) => void,
 }> = ({ routes, registry, offDriverIds, onUpdate, onAddRow, onDeleteRow, onOpenSplit, onOpenReassign }) => {
+    const [teamFilter, setTeamFilter] = useState<string>('All');
     const sortedRoutes = useMemo(() => [...routes].sort((a, b) => compareRouteNums(a.routeNum, b.routeNum)), [routes]);
+
+    const teamCounts = useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const r of routes) {
+            const g = r.driverGroup && r.driverGroup !== '' ? r.driverGroup : 'Unassigned';
+            counts[g] = (counts[g] || 0) + 1;
+        }
+        return counts;
+    }, [routes]);
+    const filterChips = ['Company', ...AGENCIES, 'Unassigned'].filter(g => (teamCounts[g] || 0) > 0);
+    const visibleRoutes = teamFilter === 'All'
+        ? sortedRoutes
+        : sortedRoutes.filter(r => ((r.driverGroup && r.driverGroup !== '') ? r.driverGroup : 'Unassigned') === teamFilter);
 
     return (
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden min-h-[400px]">
@@ -954,6 +1011,28 @@ const MainEditor: React.FC<{
                     <i className="fa-solid fa-plus"></i> Add New Route
                 </button>
             </div>
+            {routes.length > 0 && (
+              <div className="px-8 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setTeamFilter('All')}
+                  className={`px-3.5 py-1.5 rounded-xl text-[11px] font-black border transition-all ${teamFilter === 'All' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                >
+                  All · {routes.length}
+                </button>
+                {filterChips.map(g => (
+                  <button
+                    key={g}
+                    onClick={() => setTeamFilter(teamFilter === g ? 'All' : g)}
+                    className={`px-3.5 py-1.5 rounded-xl text-[11px] font-black border transition-all ${teamFilter === g ? getAgencyColor(g) + ' ring-2 ring-offset-1 ring-slate-400' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                  >
+                    {g} · {teamCounts[g]}
+                  </button>
+                ))}
+                {teamFilter !== 'All' && (
+                  <span className="text-[10px] text-slate-400 font-bold ml-2">只显示 {teamFilter} 的 {visibleRoutes.length} 条线 — 中介反馈改号/剪切都在这里完成</span>
+                )}
+              </div>
+            )}
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 border-b border-slate-100">
@@ -969,7 +1048,7 @@ const MainEditor: React.FC<{
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                        {sortedRoutes.map(route => {
+                        {visibleRoutes.map(route => {
                             const baseRoutePart = route.routeNum.split('-')[0];
                             const showHoldBtn = ['33045', '33050', '33055'].includes(baseRoutePart);
                             const isOff = route.isDriverOff || (route.driverId ? offDriverIds.has(route.driverId) : false);
@@ -1511,21 +1590,24 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleSplit = (firstVolume: number, brokerAgency: string | null) => {
+  const handleSplit = (firstVolume: number, secondDriverId: string | null) => {
     if (!splittingRoute) return;
     const secondVolume = splittingRoute.orderVolume - firstVolume;
-    const brokerEntry = brokerAgency ? Object.entries(registry).find(([, d]) => d.group === brokerAgency) : null;
-    const brokerId = brokerEntry?.[0] || '';
-    const brokerData = brokerEntry?.[1];
+    const isBrokerRoute = AGENCIES.includes(splittingRoute.driverGroup || '');
+    const d = secondDriverId ? registry[secondDriverId] : null;
+    // A hand-typed ID unknown to the registry on a broker route stays in
+    // that broker's team (brokers only assign their own drivers).
+    const fallbackGroup = secondDriverId && isBrokerRoute ? splittingRoute.driverGroup : 'Unassigned';
+    const secondName = d?.name || (secondDriverId ? `Driver ${secondDriverId}` : 'Unassigned');
     const secondPart: RouteData = {
       ...splittingRoute,
       id: `split-${splittingRoute.id}-${Date.now()}`,
       routeNum: splittingRoute.routeNum + '.1',
       orderVolume: secondVolume,
-      driverId: brokerId,
-      driverName: brokerData?.name || 'Unassigned',
-      driverGroup: brokerData?.group || 'Unassigned',
-      driver: brokerData?.name || 'Unassigned',
+      driverId: secondDriverId || '',
+      driverName: secondName,
+      driverGroup: d?.group || fallbackGroup,
+      driver: secondName,
       parentId: splittingRoute.id,
       capacityStatus: undefined,
       capacityExcess: 0,
@@ -1922,7 +2004,17 @@ const App: React.FC = () => {
                 </div>
             )}
         </main>
-        {splittingRoute && <SplitModal route={splittingRoute} onClose={() => setSplittingRoute(null)} onConfirm={handleSplit} />}
+        {splittingRoute && (
+          <SplitModal
+            route={splittingRoute}
+            teamDrivers={Object.entries(registry)
+              .filter(([, d]) => d.group === splittingRoute.driverGroup)
+              .map(([id, d]) => ({ id, name: d.name }))}
+            agencyFirstDriverIds={agencyFirstDriverIds}
+            onClose={() => setSplittingRoute(null)}
+            onConfirm={handleSplit}
+          />
+        )}
         {reassigningRoute && (
           <ReassignModal
             route={reassigningRoute}
