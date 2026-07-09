@@ -89,6 +89,24 @@ describe('cloudSync', () => {
     expect(loaded?.data.deletedDriverIds).toEqual(['2218']);
   });
 
+  it('round-trips the pending (temp) drivers row separately from the roster', async () => {
+    const { savePending, loadPending } = await import('../services/cloudSync');
+    let savedBody: any = null;
+    (globalThis as any).fetch = vi.fn(async (_url: string, opts?: any) => {
+      if (opts?.method === 'POST') {
+        savedBody = JSON.parse(opts.body);
+        return { ok: true, text: async () => '' };
+      }
+      return { ok: true, json: async () => [{ data: savedBody.data }] };
+    });
+
+    await savePending({ '12588': { name: 'Kaneza Team', group: 'Kaneza', temp: true } });
+    expect(savedBody.id).toBe('yow-pending');
+
+    const pending = await loadPending();
+    expect(pending?.['12588'].group).toBe('Kaneza');
+  });
+
   it('loadRoster returns null instead of throwing when unreachable', async () => {
     const { loadRoster } = await import('../services/cloudSync');
     (globalThis as any).fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));

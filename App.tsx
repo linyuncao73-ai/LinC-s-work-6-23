@@ -1,9 +1,9 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { parseExcelFile } from './services/excelParser';
-import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
-import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
+import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
@@ -582,17 +582,42 @@ const DriversView: React.FC<{
   onUpsert: (id: string, entry: { name: string; group: string; maxCapacity?: number }) => void;
   onDelete: (id: string) => void;
   onPush: () => void;
-}> = ({ registry, dirty, onUpsert, onDelete, onPush }) => {
+  onApproveTemp: (id: string) => void;
+  onApproveAllTemp: () => void;
+  onDeleteTemp: (id: string) => void;
+}> = ({ registry, dirty, onUpsert, onDelete, onPush, onApproveTemp, onApproveAllTemp, onDeleteTemp }) => {
   const [search, setSearch] = useState('');
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
   const [newGroup, setNewGroup] = useState('Company');
   const [newMax, setNewMax] = useState('');
+  const [approveId, setApproveId] = useState('');
+  const [approveMsg, setApproveMsg] = useState('');
   const groupsOrder = ['Company', ...AGENCIES];
+
+  const tempRows = useMemo(
+    () => Object.entries(registry).filter(([, d]) => d.temp).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })),
+    [registry]
+  );
+
+  const approveByInput = () => {
+    const id = approveId.replace(/\D/g, '');
+    if (!id) return;
+    if (registry[id]?.temp) {
+      onApproveTemp(id);
+      setApproveMsg(`✓ ${id} 已转为永久司机（记得点 Update 上传）`);
+      setApproveId('');
+    } else if (registry[id]) {
+      setApproveMsg(`${id} 已经是永久司机`);
+    } else {
+      setApproveMsg(`临时名单里没有 ${id}`);
+    }
+  };
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return Object.entries(registry)
+      .filter(([, d]) => !d.temp)
       .filter(([id, d]) => !q || id.includes(q) || d.name.toLowerCase().includes(q))
       .sort((a, b) => {
         const ga = groupsOrder.indexOf(a[1].group);
@@ -635,6 +660,43 @@ const DriversView: React.FC<{
           </button>
         </div>
       </div>
+      {tempRows.length > 0 && (
+        <div className="px-8 py-5 bg-orange-50 border-b-2 border-orange-200">
+          <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
+            <h4 className="font-black text-orange-800 text-sm">
+              <i className="fa-solid fa-hourglass-half mr-2"></i>临时司机 · 待批准（{tempRows.length}）
+            </h4>
+            <button
+              onClick={onApproveAllTemp}
+              className="px-4 py-2 rounded-xl bg-orange-500 text-white text-xs font-black hover:bg-orange-600 transition-all"
+            >
+              全部转正 ✓
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {tempRows.map(([id, d]) => (
+              <span key={id} className="inline-flex items-center gap-2 bg-white border border-orange-200 rounded-xl px-3 py-1.5">
+                <span className="font-mono text-xs font-bold text-slate-700">{id}</span>
+                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${getAgencyColor(d.group)}`}>{d.group}</span>
+                <button onClick={() => onApproveTemp(id)} className="text-emerald-600 hover:text-emerald-800 text-xs font-black" title="转为永久司机">转正</button>
+                <button onClick={() => { if (window.confirm(`删除临时司机 ${id}？`)) onDeleteTemp(id); }} className="text-slate-300 hover:text-red-500 text-xs" title="删除"><i className="fa-solid fa-xmark"></i></button>
+              </span>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={approveId}
+              onChange={e => { setApproveId(e.target.value.replace(/\D/g, '')); setApproveMsg(''); }}
+              onKeyDown={e => { if (e.key === 'Enter') approveByInput(); }}
+              placeholder="输入司机号转为永久"
+              className="w-44 px-3 py-2 border-2 border-orange-200 rounded-xl text-xs font-mono focus:border-orange-400 focus:outline-none bg-white"
+            />
+            <button onClick={approveByInput} disabled={!approveId} className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 transition-all disabled:opacity-30">转正</button>
+            {approveMsg && <span className="text-xs font-bold text-orange-700">{approveMsg}</span>}
+            <span className="text-[10px] text-orange-500 ml-auto">临时司机自动同步给同事；转正后记得点 Update to Supabase 上传正式名册</span>
+          </div>
+        </div>
+      )}
       <div className="px-8 py-4 bg-orange-50/40 border-b border-slate-100 flex flex-wrap items-end gap-3">
         <div>
           <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Driver ID</p>
@@ -1581,22 +1643,78 @@ const App: React.FC = () => {
     for (const [id, d] of Object.entries(reg)) {
       if (validGroups.has(d.group) && !REMOVED_DRIVER_IDS.includes(id) && !deleted.includes(id)) cleaned[id] = d;
     }
-    setRegistry(cleaned);
+    // The cloud roster only holds approved drivers — keep local temp ones
+    setRegistry(prev => ({ ...cleaned, ...partitionRegistry(prev).temp }));
     setDeletedDriverIds(deleted);
   };
 
-  // On startup, pull the shared roster from Supabase — unless this browser
-  // has local edits that haven't been pushed yet (they'd be lost).
+  // On startup, pull the shared roster (unless this browser has un-pushed
+  // edits) and always merge in the shared pending (temp) drivers row.
   useEffect(() => {
-    if (rosterDirty) return;
     (async () => {
+      if (!rosterDirty) {
+        try {
+          const result = await loadRoster();
+          if (result) applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
+        } catch { /* offline or unconfigured — keep local roster */ }
+      }
       try {
-        const result = await loadRoster();
-        if (result) applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
-      } catch { /* offline or unconfigured — keep local roster */ }
+        const pending = await loadPending();
+        if (pending) {
+          setRegistry(prev => {
+            const merged = { ...prev };
+            for (const [id, d] of Object.entries(pending)) {
+              if (!merged[id]) merged[id] = { ...d, temp: true };
+            }
+            return merged;
+          });
+        }
+      } catch { /* ignore */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-sync the temp (pending) drivers to their own cloud row — silent,
+  // debounced, no password: this is the staging area for approval.
+  const lastPendingSyncRef = useRef<string | null>(null);
+  useEffect(() => {
+    const temp = partitionRegistry(registry).temp;
+    const json = JSON.stringify(temp);
+    if (lastPendingSyncRef.current === null) {
+      // Skip the initial render — only push actual changes
+      lastPendingSyncRef.current = json;
+      return;
+    }
+    if (json === lastPendingSyncRef.current) return;
+    lastPendingSyncRef.current = json;
+    const t = setTimeout(() => { savePending(temp).catch(() => { /* offline — next change retries */ }); }, 1000);
+    return () => clearTimeout(t);
+  }, [registry]);
+
+  const handleApproveTemp = (id: string) => {
+    setRegistry(prev => {
+      const entry = prev[id];
+      if (!entry?.temp) return prev;
+      return { ...prev, [id]: { ...entry, temp: undefined, edited: true } };
+    });
+    markRosterDirty(true);
+  };
+
+  const handleApproveAllTemp = () => {
+    setRegistry(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const [id, d] of Object.entries(next)) {
+        if (d.temp) { next[id] = { ...d, temp: undefined, edited: true }; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+    markRosterDirty(true);
+  };
+
+  const handleDeleteTemp = (id: string) => {
+    setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
+  };
 
   const handleRosterPush = async () => {
     const pw = window.prompt('输入修改密码后上传名册到 Supabase：');
@@ -1607,9 +1725,10 @@ const App: React.FC = () => {
     }
     setCloudStatus({ type: 'loading', message: '正在上传名册到 Supabase…' });
     try {
-      await saveRoster({ registry, deletedDriverIds, savedAt: new Date().toISOString() });
+      const { permanent } = partitionRegistry(registry);
+      await saveRoster({ registry: permanent, deletedDriverIds, savedAt: new Date().toISOString() });
       markRosterDirty(false);
-      setCloudStatus({ type: 'success', message: `名册已更新到 Supabase（${Object.keys(registry).length} 名司机）。其他电脑打开网页会自动拉取。` });
+      setCloudStatus({ type: 'success', message: `名册已更新到 Supabase（${Object.keys(permanent).length} 名司机）。其他电脑打开网页会自动拉取。` });
     } catch (err: any) {
       setCloudStatus({ type: 'error', message: err.message || '名册上传失败，请重试' });
     }
@@ -1624,13 +1743,12 @@ const App: React.FC = () => {
       if (unknowns.length > 0) {
         const additions: DriverRegistry = {};
         for (const u of unknowns) {
-          additions[u.id] = { name: `${u.group} Team`, group: u.group, edited: true };
+          additions[u.id] = { name: `${u.group} Team`, group: u.group, temp: true };
         }
         effectiveRegistry = { ...registry, ...additions };
         setRegistry(effectiveRegistry);
         setDeletedDriverIds(prev => prev.filter(id => !additions[id]));
-        markRosterDirty(true);
-        addedNote = ` · 已把 ${unknowns.length} 个新司机号加入名册（记得在 Drivers 页 Update 上传）`;
+        addedNote = ` · ${unknowns.length} 个新司机号已登记为临时司机（Drivers 页可批准转正）`;
       }
     }
     const { routes: next, notes } = applyFeedbackOps(routes, ops, effectiveRegistry);
@@ -1857,10 +1975,9 @@ const App: React.FC = () => {
     // same broker team so it shows up in pickers from now on.
     if (secondDriverId && !registry[secondDriverId] && isBrokerRoute) {
       const team = splittingRoute.driverGroup;
-      if (window.confirm(`司机号 ${secondDriverId} 不在名册里。要临时加入 ${team} 名册吗？\n（加入后拆分/改派列表里都能选到；之后可在 Drivers 页上传到 Supabase 或删除）`)) {
-        setRegistry(prev => ({ ...prev, [secondDriverId]: { name: `${team} Team`, group: team, edited: true } }));
+      if (window.confirm(`司机号 ${secondDriverId} 不在名册里。要登记为 ${team} 的临时司机吗？\n（拆分/改派列表里都能选到；在 Drivers 页可批准转正为永久司机）`)) {
+        setRegistry(prev => ({ ...prev, [secondDriverId]: { name: `${team} Team`, group: team, temp: true } }));
         setDeletedDriverIds(prev => prev.filter(x => x !== secondDriverId));
-        markRosterDirty(true);
       }
     }
     const d = secondDriverId ? registry[secondDriverId] : null;
@@ -2198,7 +2315,7 @@ const App: React.FC = () => {
                     {view === 'bookmarks' ? (
                       <BookmarksView />
                     ) : view === 'drivers' ? (
-                      <DriversView registry={registry} dirty={rosterDirty} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} onPush={handleRosterPush} />
+                      <DriversView registry={registry} dirty={rosterDirty} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} onPush={handleRosterPush} onApproveTemp={handleApproveTemp} onApproveAllTemp={handleApproveAllTemp} onDeleteTemp={handleDeleteTemp} />
                     ) : showLanding ? (
                       /* Show the full landing page if on a data-driven view with no data */
                       <div className="py-20 text-center max-w-2xl mx-auto">

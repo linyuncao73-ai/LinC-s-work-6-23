@@ -129,6 +129,49 @@ export async function saveRoster(payload: RosterPayload): Promise<void> {
   }
 }
 
+// ---- Pending (temp) drivers: their own row, separate from the approved
+// ---- roster, so provisional additions sync automatically and can be
+// ---- reviewed/approved in one place.
+
+const PENDING_ID = 'yow-pending';
+
+export async function savePending(pending: DriverRegistry): Promise<void> {
+  const { url, key } = getConfig();
+  const passcode = getTeamPasscode();
+  const payload = { pending, savedAt: new Date().toISOString() };
+  const body = passcode ? await encryptJson(payload, passcode) : payload;
+  const res = await fetch(`${url}/rest/v1/dispatch_snapshots`, {
+    method: 'POST',
+    headers: {
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ id: PENDING_ID, data: body, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) throw new Error(`临时司机同步失败（HTTP ${res.status}）`);
+}
+
+export async function loadPending(): Promise<DriverRegistry | null> {
+  const { url, key } = getConfig();
+  const res = await fetch(
+    `${url}/rest/v1/dispatch_snapshots?id=eq.${PENDING_ID}&select=data`,
+    { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
+  );
+  if (!res.ok) return null;
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let data = rows[0].data;
+  if (isEncryptedPayload(data)) {
+    const passcode = getTeamPasscode();
+    if (!passcode) return null;
+    data = await decryptJson(data, passcode);
+  }
+  if (!data || typeof data.pending !== 'object') return null;
+  return data.pending as DriverRegistry;
+}
+
 export async function loadRoster(): Promise<{ data: RosterPayload; updatedAt: string } | null> {
   const { url, key } = getConfig();
   const res = await fetch(

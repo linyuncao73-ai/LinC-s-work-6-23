@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeEbinderDate, ebinderDateMatchesBatchDate, getOffDriverIds, weekdayOfBatchDate, EbinderData } from '../types';
+import { normalizeEbinderDate, ebinderDateMatchesBatchDate, getOffDriverIds, weekdayOfBatchDate, partitionRegistry, EbinderData } from '../types';
+
+describe('partitionRegistry', () => {
+  it('splits temp and permanent entries', () => {
+    const { permanent, temp } = partitionRegistry({
+      '19492': { name: 'Fath', group: 'Company' },
+      '12588': { name: 'Kaneza Team', group: 'Kaneza', temp: true },
+      '13456': { name: 'Ammar', group: 'Company', edited: true },
+    });
+    expect(Object.keys(permanent).sort()).toEqual(['13456', '19492']);
+    expect(Object.keys(temp)).toEqual(['12588']);
+  });
+
+  it('handles an empty registry', () => {
+    expect(partitionRegistry({})).toEqual({ permanent: {}, temp: {} });
+  });
+});
 
 describe('normalizeEbinderDate', () => {
   it('parses the formats seen on real e-binder sheets', () => {

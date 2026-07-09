@@ -236,10 +236,22 @@ export interface DriverRegistryEntry {
   maxCapacity?: number;
   /** Set when the entry was changed in the Drivers screen — UI edits then win over code defaults. */
   edited?: boolean;
+  /** Provisional driver from broker feedback / manual splits — pending approval into the roster. */
+  temp?: boolean;
 }
 
 export interface DriverRegistry {
   [id: string]: DriverRegistryEntry;
+}
+
+/** Splits a registry into approved roster entries and provisional (temp) ones. */
+export function partitionRegistry(registry: DriverRegistry): { permanent: DriverRegistry; temp: DriverRegistry } {
+  const permanent: DriverRegistry = {};
+  const temp: DriverRegistry = {};
+  for (const [id, d] of Object.entries(registry)) {
+    if (d.temp) temp[id] = d; else permanent[id] = d;
+  }
+  return { permanent, temp };
 }
 
 export const ALLOWED_TIME_SLOTS = ['06:00 AM', '07:00 AM', '08:00 AM'];
