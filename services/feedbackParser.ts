@@ -229,6 +229,28 @@ export async function parseBrokerFeedback(
 }
 
 /**
+ * Driver IDs mentioned in the feedback that aren't in the registry yet,
+ * paired with the broker team of the route they appear on.
+ */
+export function collectUnknownDrivers(
+  ops: FeedbackOp[],
+  routes: RouteData[],
+  registry: DriverRegistry
+): { id: string; group: string }[] {
+  const seen = new Map<string, string>();
+  for (const op of ops) {
+    const route = routes.find(r => r.routeNum === op.routeNum);
+    const group = route?.driverGroup || 'Unassigned';
+    for (const seg of op.segments) {
+      if (seg.driverId && !registry[seg.driverId] && !seen.has(seg.driverId)) {
+        seen.set(seg.driverId, group);
+      }
+    }
+  }
+  return [...seen.entries()].map(([id, group]) => ({ id, group }));
+}
+
+/**
  * Applies parsed feedback to the route table. Pure function: totals per base
  * route are always preserved (the last segment absorbs any difference).
  */

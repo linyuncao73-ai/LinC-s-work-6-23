@@ -424,13 +424,27 @@ const FeedbackModal: React.FC<{
   routes: RouteData[];
   registry: DriverRegistry;
   onClose: () => void;
-  onApply: (ops: FeedbackOp[]) => void;
+  onApply: (ops: FeedbackOp[], addUnknownDrivers: boolean) => void;
 }> = ({ routes, registry, onClose, onApply }) => {
   const [text, setText] = useState('');
   const [phase, setPhase] = useState<'input' | 'parsing' | 'preview'>('input');
   const [ops, setOps] = useState<FeedbackOp[]>([]);
   const [checked, setChecked] = useState<Record<number, boolean>>({});
+  const [addUnknown, setAddUnknown] = useState(true);
   const [error, setError] = useState('');
+
+  const unknownDrivers = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const op of ops) {
+      const route = routes.find(r => r.routeNum === op.routeNum);
+      for (const seg of op.segments) {
+        if (seg.driverId && !registry[seg.driverId] && !seen.has(seg.driverId)) {
+          seen.set(seg.driverId, route?.driverGroup || 'Unassigned');
+        }
+      }
+    }
+    return [...seen.entries()].map(([id, group]) => ({ id, group }));
+  }, [ops, routes, registry]);
 
   const parse = async () => {
     setPhase('parsing');
@@ -533,15 +547,27 @@ const FeedbackModal: React.FC<{
                 );
               })}
             </div>
-            <div className="p-7 bg-slate-50 grid grid-cols-2 gap-4 flex-shrink-0">
-              <button onClick={() => setPhase('input')} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">← 改文字重新解析</button>
-              <button
-                onClick={() => onApply(ops.filter((_, i) => checked[i]))}
-                disabled={selectedCount === 0}
-                className="px-6 py-4 rounded-2xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 transition-all shadow-lg disabled:opacity-40"
-              >
-                套用 {selectedCount} 条改动 ✓
-              </button>
+            <div className="p-7 bg-slate-50 flex-shrink-0 space-y-4">
+              {unknownDrivers.length > 0 && (
+                <label className="flex items-start gap-3 p-3 rounded-xl bg-orange-50 border border-orange-200 cursor-pointer">
+                  <input type="checkbox" checked={addUnknown} onChange={() => setAddUnknown(v => !v)} className="mt-0.5" />
+                  <span className="text-xs text-orange-800">
+                    <span className="font-black">发现 {unknownDrivers.length} 个名册里没有的司机号：</span>
+                    {unknownDrivers.map(u => `${u.id}（${u.group}）`).join('、')}
+                    <span className="block mt-1 text-orange-600">勾选 = 套用时临时加入对应中介名册（之后可在 Drivers 页上传到 Supabase 或删除）</span>
+                  </span>
+                </label>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <button onClick={() => setPhase('input')} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">← 改文字重新解析</button>
+                <button
+                  onClick={() => onApply(ops.filter((_, i) => checked[i]), addUnknown)}
+                  disabled={selectedCount === 0}
+                  className="px-6 py-4 rounded-2xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 transition-all shadow-lg disabled:opacity-40"
+                >
+                  套用 {selectedCount} 条改动 ✓
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -1589,14 +1615,30 @@ const App: React.FC = () => {
     }
   };
 
-  const handleApplyFeedback = async (ops: FeedbackOp[]) => {
-    const { applyFeedbackOps } = await import('./services/feedbackParser');
-    const { routes: next, notes } = applyFeedbackOps(routes, ops, registry);
+  const handleApplyFeedback = async (ops: FeedbackOp[], addUnknownDrivers: boolean) => {
+    const { applyFeedbackOps, collectUnknownDrivers } = await import('./services/feedbackParser');
+    let effectiveRegistry = registry;
+    let addedNote = '';
+    if (addUnknownDrivers) {
+      const unknowns = collectUnknownDrivers(ops, routes, registry);
+      if (unknowns.length > 0) {
+        const additions: DriverRegistry = {};
+        for (const u of unknowns) {
+          additions[u.id] = { name: `${u.group} Team`, group: u.group, edited: true };
+        }
+        effectiveRegistry = { ...registry, ...additions };
+        setRegistry(effectiveRegistry);
+        setDeletedDriverIds(prev => prev.filter(id => !additions[id]));
+        markRosterDirty(true);
+        addedNote = ` · 已把 ${unknowns.length} 个新司机号加入名册（记得在 Drivers 页 Update 上传）`;
+      }
+    }
+    const { routes: next, notes } = applyFeedbackOps(routes, ops, effectiveRegistry);
     setRoutes(next);
     setShowFeedbackModal(false);
     setCloudStatus({
       type: 'success',
-      message: `已套用 ${ops.length} 条中介反馈${notes.length ? ' · ' + notes.join('；') : ''}`,
+      message: `已套用 ${ops.length} 条中介反馈${addedNote}${notes.length ? ' · ' + notes.join('；') : ''}`,
     });
   };
 
@@ -1811,6 +1853,16 @@ const App: React.FC = () => {
     if (!splittingRoute) return;
     const secondVolume = splittingRoute.orderVolume - firstVolume;
     const isBrokerRoute = AGENCIES.includes(splittingRoute.driverGroup || '');
+    // A hand-typed ID the roster doesn't know: offer to register it under the
+    // same broker team so it shows up in pickers from now on.
+    if (secondDriverId && !registry[secondDriverId] && isBrokerRoute) {
+      const team = splittingRoute.driverGroup;
+      if (window.confirm(`司机号 ${secondDriverId} 不在名册里。要临时加入 ${team} 名册吗？\n（加入后拆分/改派列表里都能选到；之后可在 Drivers 页上传到 Supabase 或删除）`)) {
+        setRegistry(prev => ({ ...prev, [secondDriverId]: { name: `${team} Team`, group: team, edited: true } }));
+        setDeletedDriverIds(prev => prev.filter(x => x !== secondDriverId));
+        markRosterDirty(true);
+      }
+    }
     const d = secondDriverId ? registry[secondDriverId] : null;
     // A hand-typed ID unknown to the registry on a broker route stays in
     // that broker's team (brokers only assign their own drivers).

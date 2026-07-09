@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFeedbackOps, FeedbackOp } from '../services/feedbackParser';
+import { applyFeedbackOps, collectUnknownDrivers, FeedbackOp } from '../services/feedbackParser';
 import { RouteData, DriverRegistry } from '../types';
 
 const registry: DriverRegistry = {
@@ -78,6 +78,22 @@ describe('applyFeedbackOps', () => {
     expect(next).toHaveLength(1);
     expect(next[0].driverId).toBe('18944');
     expect(notes.some(n => n.includes('找不到'))).toBe(true);
+  });
+
+  it('collectUnknownDrivers reports new IDs with their route team, deduped', () => {
+    const routes = [
+      mkRoute({ routeNum: '33029-3-1' }),
+      mkRoute({ routeNum: '33022-4-1', driverGroup: 'Kaneza' }),
+    ];
+    const ops: FeedbackOp[] = [
+      { routeNum: '33029-3-1', segments: [{ driverId: '18944', volume: 120 }, { driverId: '99999', volume: 67 }] },
+      { routeNum: '33022-4-1', segments: [{ driverId: '12588', volume: 100 }, { driverId: '99999', volume: null }] },
+    ];
+    const unknowns = collectUnknownDrivers(ops, routes, registry);
+    expect(unknowns).toEqual([
+      { id: '99999', group: 'Alain' }, // first occurrence wins the team
+      { id: '12588', group: 'Kaneza' },
+    ]);
   });
 
   it('re-applying feedback folds existing cut rows back first (idempotent)', () => {
