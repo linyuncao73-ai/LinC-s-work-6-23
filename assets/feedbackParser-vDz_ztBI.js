@@ -1,4 +1,4 @@
-import{G as O,g as T,T as u}from"./geminiClient-Q5Csk93W.js";import{A as x,g as k}from"./index-66Sy14d4.js";async function B(h,p){const f=new O({apiKey:k()}),n=`
+import{G as O,g as T,T as u}from"./geminiClient-ASKKQqJR.js";import{A as x,g as k}from"./index-DU9sl-vJ.js";async function B(h,p){const f=new O({apiKey:k()}),n=`
     You are parsing a delivery broker's WhatsApp reply that assigns drivers to routes.
 
     CURRENT ROUTE TABLE (the only valid targets — every assignment you output
