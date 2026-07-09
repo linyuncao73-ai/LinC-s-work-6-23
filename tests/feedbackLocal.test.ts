@@ -1,14 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { parseFeedbackTextLocal, CandidateRoute } from '../services/feedbackParser';
 
-const mk = (routeNum: string, orderVolume = 300): CandidateRoute =>
-  ({ routeNum, orderVolume, driverId: '', driverGroup: 'Alain' });
+const mk = (routeNum: string, orderVolume = 300, driverGroup = 'Alain'): CandidateRoute =>
+  ({ routeNum, orderVolume, driverId: '', driverGroup });
 
 describe('parseFeedbackTextLocal — real broker reply styles', () => {
-  it('Alain style: "18944  29-1  #120" with .1/.2 suffix folding', () => {
-    const candidates = [mk('33029-3-1'), mk('33029-3-2'), mk('33029-3-3'), mk('33050-3-1'), mk('33055-4-3'), mk('33055-4-4'), mk('33014-3-1'), mk('33015-2-1'), mk('33019-2-2')];
+  it('Alain style: "18944  29-1  #120" with .1/.2 suffix folding and cut-only lines', () => {
+    const candidates = [
+      mk('33029-3-1'), mk('33029-3-2'), mk('33029-3-3'),
+      mk('33050-3-1'), mk('33055-4-3'), mk('33055-4-4'), mk('33014-3-1'),
+      // Company bases whose ".1" cuts belong to Alain — must still resolve
+      mk('33015-2-1', 300, 'Company'), mk('33019-2-2', 300, 'Company'),
+    ];
     const text = `
 19994        14-1
+
+5003303   15-1.1
+
+32140       19-2.1
 
 18944        29-1    #120
 
@@ -33,26 +42,29 @@ describe('parseFeedbackTextLocal — real broker reply styles', () => {
     const ops = parseFeedbackTextLocal(text, candidates);
     const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
 
-    expect(byRoute['33014-3-1']).toEqual([{ driverId: '19994', volume: null }]);
+    expect(byRoute['33014-3-1']).toEqual([{ driverId: '19994', volume: null, partIdx: 0 }]);
+    // The two previously-missed lines: cut-only mentions on company bases
+    expect(byRoute['33015-2-1']).toEqual([{ driverId: '5003303', volume: null, partIdx: 1 }]);
+    expect(byRoute['33019-2-2']).toEqual([{ driverId: '32140', volume: null, partIdx: 1 }]);
     expect(byRoute['33029-3-1']).toEqual([
-      { driverId: '18944', volume: 120 },
-      { driverId: '18943', volume: 67 },
+      { driverId: '18944', volume: 120, partIdx: 0 },
+      { driverId: '18943', volume: 67, partIdx: 1 },
     ]);
     expect(byRoute['33029-3-2']).toEqual([
-      { driverId: '18943', volume: 50 },
-      { driverId: '19997', volume: 120 },
-      { driverId: '32110', volume: 36 },
+      { driverId: '18943', volume: 50, partIdx: 0 },
+      { driverId: '19997', volume: 120, partIdx: 1 },
+      { driverId: '32110', volume: 36, partIdx: 2 },
     ]);
     expect(byRoute['33029-3-3']).toEqual([
-      { driverId: '32110', volume: 78 },
-      { driverId: '19017', volume: 120 },
+      { driverId: '32110', volume: 78, partIdx: 0 },
+      { driverId: '19017', volume: 120, partIdx: 1 },
     ]);
-    expect(byRoute['33050-3-1']).toEqual([{ driverId: '19993', volume: null }]);
-    expect(byRoute['33055-4-3']).toEqual([{ driverId: '19995', volume: null }]);
-    expect(byRoute['33055-4-4']).toEqual([{ driverId: '18941', volume: null }]);
+    expect(byRoute['33050-3-1']).toEqual([{ driverId: '19993', volume: null, partIdx: 0 }]);
+    expect(byRoute['33055-4-3']).toEqual([{ driverId: '19995', volume: null, partIdx: 0 }]);
+    expect(byRoute['33055-4-4']).toEqual([{ driverId: '18941', volume: null, partIdx: 0 }]);
   });
 
-  it('Kaneza style: "22-1: 20059(190) to 12588(100)" and bare-driver lines', () => {
+  it('Kaneza style: "22-1: 20059(190) to 12588(100)" renumbers unsuffixed segments', () => {
     const candidates = [mk('33022-4-1'), mk('33022-4-2'), mk('33022-4-3'), mk('33022-4-4'), mk('33024-2-1'), mk('33024-2-2'), mk('33026-3-1')];
     const text = `Some changes
 22-1: 20059(190) to 12588(100)
@@ -65,16 +77,16 @@ describe('parseFeedbackTextLocal — real broker reply styles', () => {
     const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
 
     expect(byRoute['33022-4-1']).toEqual([
-      { driverId: '20059', volume: 190 },
-      { driverId: '12588', volume: 100 },
+      { driverId: '20059', volume: 190, partIdx: 0 },
+      { driverId: '12588', volume: 100, partIdx: 1 },
     ]);
     expect(byRoute['33022-4-3']).toEqual([
-      { driverId: '19526', volume: 153 },
-      { driverId: '2900', volume: 50 },
-      { driverId: '7411', volume: 153 },
+      { driverId: '19526', volume: 153, partIdx: 0 },
+      { driverId: '2900', volume: 50, partIdx: 1 },
+      { driverId: '7411', volume: 153, partIdx: 2 },
     ]);
-    expect(byRoute['33022-4-4']).toEqual([{ driverId: '19523', volume: null }]);
-    expect(byRoute['33026-3-1']).toEqual([{ driverId: '19525', volume: null }]);
+    expect(byRoute['33022-4-4']).toEqual([{ driverId: '19523', volume: null, partIdx: 0 }]);
+    expect(byRoute['33026-3-1']).toEqual([{ driverId: '19525', volume: null, partIdx: 0 }]);
   });
 
   it('Parfait style: "28715-33018-2. 135pkges"', () => {
@@ -88,10 +100,11 @@ describe('parseFeedbackTextLocal — real broker reply styles', () => {
     const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
 
     expect(byRoute['33018-2-2']).toEqual([
-      { driverId: '28715', volume: 135 },
-      { driverId: '27891', volume: 148 },
+      { driverId: '28715', volume: 135, partIdx: 0 },
+      { driverId: '27891', volume: 148, partIdx: 1 },
     ]);
-    expect(byRoute['33030-3-3']).toEqual([{ driverId: '5002460', volume: 114 }]);
+    expect(byRoute['33019-2-1']).toEqual([{ driverId: '29155', volume: null, partIdx: 1 }]);
+    expect(byRoute['33030-3-3']).toEqual([{ driverId: '5002460', volume: 114, partIdx: 0 }]);
   });
 
   it('Christ style: "Driver ID 19749: 33020 - 2 (1 - 150)"', () => {
@@ -105,11 +118,11 @@ Driver ID 20135: 33055 - 1`;
     const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
 
     expect(byRoute['33020-2-2']).toEqual([
-      { driverId: '19749', volume: 150 },
-      { driverId: '23606', volume: null },
+      { driverId: '19749', volume: 150, partIdx: 0 },
+      { driverId: '23606', volume: null, partIdx: 1 },
     ]);
-    expect(byRoute['33050-3-2']).toEqual([{ driverId: '30913', volume: null }]);
-    expect(byRoute['33055-4-1']).toEqual([{ driverId: '20135', volume: null }]);
+    expect(byRoute['33050-3-2']).toEqual([{ driverId: '30913', volume: null, partIdx: 0 }]);
+    expect(byRoute['33055-4-1']).toEqual([{ driverId: '20135', volume: null, partIdx: 0 }]);
   });
 
   it('Alawi style: our own report format echoed back', () => {
@@ -130,10 +143,10 @@ Tomorrow's routes, thanks`;
     const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
 
     expect(byRoute['33018-2-1']).toEqual([
-      { driverId: '15165', volume: 147 },
-      { driverId: '15173', volume: 148 },
+      { driverId: '15165', volume: 147, partIdx: 0 },
+      { driverId: '15173', volume: 148, partIdx: 1 },
     ]);
-    expect(byRoute['33050-3-3']).toEqual([{ driverId: '15172', volume: 188 }]);
+    expect(byRoute['33050-3-3']).toEqual([{ driverId: '15172', volume: 188, partIdx: 0 }]);
   });
 
   it('returns [] for unmatched text so the AI fallback kicks in', () => {

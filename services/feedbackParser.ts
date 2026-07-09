@@ -1,9 +1,10 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { RouteData, DriverRegistry, AGENCIES } from "../types";
+import { RouteData, DriverRegistry } from "../types";
 import { getApiKey } from "./apiKey";
 import { generateWithRetry } from "./geminiClient";
 
-export interface FeedbackSegment { driverId: string; volume: number | null }
+/** partIdx 0 = the base row; n = the ".n" cut row of that base. */
+export interface FeedbackSegment { driverId: string; volume: number | null; partIdx: number }
 export interface FeedbackOp { routeNum: string; segments: FeedbackSegment[] }
 
 export interface CandidateRoute {
@@ -101,7 +102,7 @@ function parseLine(line: string): RawEntry[] {
 
 /** Deterministic parse of the whole reply. Returns [] when nothing matched. */
 export function parseFeedbackTextLocal(text: string, candidates: CandidateRoute[]): FeedbackOp[] {
-  const grouped = new Map<string, { segIdx: number; order: number; seg: FeedbackSegment }[]>();
+  const grouped = new Map<string, { segIdx: number; order: number; seg: Omit<FeedbackSegment, 'partIdx'> }[]>();
   let order = 0;
   for (const line of text.split(/\r?\n/)) {
     for (const entry of parseLine(line)) {
@@ -115,7 +116,15 @@ export function parseFeedbackTextLocal(text: string, candidates: CandidateRoute[
   const ops: FeedbackOp[] = [];
   for (const [routeNum, items] of grouped) {
     items.sort((a, b) => a.segIdx - b.segIdx || a.order - b.order);
-    ops.push({ routeNum, segments: items.map(i => i.seg) });
+    // Styles without ".n" suffixes (e.g. Kaneza "22-3: a(x),b(y),c(z)") list
+    // several segments under the same index — renumber them sequentially so
+    // they re-slice the whole base. Suffixed styles keep their part numbers.
+    const idxs = items.map(i => i.segIdx);
+    const hasDuplicates = new Set(idxs).size !== idxs.length;
+    ops.push({
+      routeNum,
+      segments: items.map((i, pos) => ({ ...i.seg, partIdx: hasDuplicates ? pos : i.segIdx })),
+    });
   }
   return ops;
 }
@@ -217,9 +226,10 @@ export async function parseBrokerFeedback(
     .map((a: any) => ({
       routeNum: String(a.routeNum || '').trim(),
       segments: (Array.isArray(a.segments) ? a.segments : [])
-        .map((s: any) => ({
+        .map((s: any, i: number) => ({
           driverId: String(s.driverId || '').replace(/\D/g, ''),
           volume: typeof s.volume === 'number' && s.volume > 0 ? Math.round(s.volume) : null,
+          partIdx: i,
         }))
         .filter((s: FeedbackSegment) => s.driverId !== ''),
     }))
@@ -239,20 +249,24 @@ export function collectUnknownDrivers(
 ): { id: string; group: string }[] {
   const seen = new Map<string, string>();
   for (const op of ops) {
-    const route = routes.find(r => r.routeNum === op.routeNum);
-    const group = route?.driverGroup || 'Unassigned';
+    const baseRoute = routes.find(r => r.routeNum === op.routeNum);
     for (const seg of op.segments) {
-      if (seg.driverId && !registry[seg.driverId] && !seen.has(seg.driverId)) {
-        seen.set(seg.driverId, group);
-      }
+      if (!seg.driverId || registry[seg.driverId] || seen.has(seg.driverId)) continue;
+      // Prefer the team of the specific cut row (a company base can have a
+      // broker-owned ".1" part), falling back to the base row's team.
+      const partRoute = seg.partIdx > 0 ? routes.find(r => r.routeNum === `${op.routeNum}.${seg.partIdx}`) : undefined;
+      seen.set(seg.driverId, partRoute?.driverGroup || baseRoute?.driverGroup || 'Unassigned');
     }
   }
   return [...seen.entries()].map(([id, group]) => ({ id, group }));
 }
 
 /**
- * Applies parsed feedback to the route table. Pure function: totals per base
- * route are always preserved (the last segment absorbs any difference).
+ * Applies parsed feedback to the route table with PART-UPDATE semantics:
+ * each segment targets one specific part (base row or ".n" cut row) and
+ * leaves unmentioned parts alone — a company-owned base whose ".1" cut
+ * belongs to a broker is updated without touching the company row.
+ * Pure function; totals per base route are always preserved.
  */
 export function applyFeedbackOps(
   routes: RouteData[],
@@ -263,96 +277,107 @@ export function applyFeedbackOps(
   let result = [...routes];
 
   for (const op of ops) {
-    // Fold any existing cut rows of this base back in first, so applying
-    // feedback is idempotent and never duplicates segments.
-    const childPrefix = `${op.routeNum}.`;
-    const children = result.filter(r => r.routeNum.startsWith(childPrefix));
-    const childSum = children.reduce((s, r) => s + (Number(r.orderVolume) || 0), 0);
-    if (children.length > 0) result = result.filter(r => !r.routeNum.startsWith(childPrefix));
-
-    const idx = result.findIndex(r => r.routeNum === op.routeNum);
-    if (idx === -1) {
+    const baseIdx = result.findIndex(r => r.routeNum === op.routeNum);
+    if (baseIdx === -1) {
       notes.push(`${op.routeNum}: 表格里找不到这条线，已跳过`);
       continue;
     }
-    const route = result[idx];
-    const total = (Number(route.orderVolume) || 0) + childSum;
-    const isBrokerRoute = AGENCIES.includes(route.driverGroup || '');
 
-    // Resolve volumes: null segments share the remainder after fixed ones
-    const fixedSum = op.segments.reduce((s, seg) => s + (seg.volume ?? 0), 0);
-    const nullCount = op.segments.filter(seg => seg.volume === null).length;
-    let volumes: number[];
-    if (nullCount > 0) {
-      const remainder = Math.max(0, total - fixedSum);
-      const share = Math.floor(remainder / nullCount);
-      let leftover = remainder - share * nullCount;
-      volumes = op.segments.map(seg => {
-        if (seg.volume !== null) return seg.volume;
+    // Pull the base row and its numeric ".n" cut rows out as a parts map
+    const prefix = `${op.routeNum}.`;
+    const isPartRow = (r: RouteData) =>
+      r.routeNum.startsWith(prefix) && /^\d+$/.test(r.routeNum.slice(prefix.length));
+    const parts = new Map<number, RouteData>();
+    parts.set(0, result[baseIdx]);
+    for (const r of result) {
+      if (isPartRow(r)) parts.set(parseInt(r.routeNum.slice(prefix.length)), r);
+    }
+    const baseRow = parts.get(0)!;
+    result = result.filter(r => r !== baseRow && !isPartRow(r));
+    const insertAt = Math.min(baseIdx, result.length);
+
+    const totalBefore = [...parts.values()].reduce((s, r) => s + (Number(r.orderVolume) || 0), 0);
+
+    const describe = (driverId: string, partIdx: number) => {
+      const d = registry[driverId];
+      const fallbackGroup = parts.get(partIdx)?.driverGroup || baseRow.driverGroup || 'Unassigned';
+      return { name: d?.name || `Driver ${driverId}`, group: d?.group || fallbackGroup };
+    };
+
+    const segs = [...op.segments].sort((a, b) => a.partIdx - b.partIdx);
+    const baseVolumeExplicit = segs.some(s => s.partIdx === 0 && s.volume !== null);
+    const nullCreations: number[] = [];
+    let lastExplicitPart: number | null = null;
+
+    for (const seg of segs) {
+      const info = describe(seg.driverId, seg.partIdx);
+      const existing = parts.get(seg.partIdx);
+      if (existing) {
+        parts.set(seg.partIdx, {
+          ...existing,
+          driverId: seg.driverId,
+          driverName: info.name,
+          driver: info.name,
+          driverGroup: info.group,
+          ...(seg.volume !== null ? { orderVolume: seg.volume } : {}),
+          capacityStatus: undefined,
+          capacityExcess: 0,
+          isDriverOff: false,
+        });
+      } else {
+        parts.set(seg.partIdx, {
+          ...baseRow,
+          id: `fb-${baseRow.id}-${seg.partIdx}-${Date.now()}`,
+          routeNum: `${op.routeNum}.${seg.partIdx}`,
+          parentId: baseRow.id,
+          isSplit: true,
+          driverId: seg.driverId,
+          driverName: info.name,
+          driver: info.name,
+          driverGroup: info.group,
+          orderVolume: seg.volume ?? 0,
+          capacityStatus: undefined,
+          capacityExcess: 0,
+          isDriverOff: false,
+        });
+        if (seg.volume === null) nullCreations.push(seg.partIdx);
+      }
+      if (seg.volume !== null) lastExplicitPart = seg.partIdx;
+    }
+    if (parts.size > 1) parts.set(0, { ...parts.get(0)!, isSplit: true });
+
+    // Newly created parts without a stated volume take the remainder
+    if (nullCreations.length > 0) {
+      const others = [...parts.entries()]
+        .filter(([pi]) => !nullCreations.includes(pi))
+        .reduce((s, [, r]) => s + (Number(r.orderVolume) || 0), 0);
+      const remainder = Math.max(0, totalBefore - others);
+      const share = Math.floor(remainder / nullCreations.length);
+      let leftover = remainder - share * nullCreations.length;
+      for (const pi of nullCreations) {
         const v = share + (leftover > 0 ? 1 : 0);
         if (leftover > 0) leftover--;
-        return v;
-      });
-      if (nullCount > 1) notes.push(`${op.routeNum}: ${nullCount} 段未写件数，已平分剩余量`);
-    } else {
-      volumes = op.segments.map(seg => seg.volume as number);
+        parts.set(pi, { ...parts.get(pi)!, orderVolume: v });
+      }
+      if (nullCreations.length > 1) notes.push(`${op.routeNum}: 多段未写件数，已平分剩余量`);
     }
 
-    // Preserve the route total by adjusting the last segment
-    const sum = volumes.reduce((s, v) => s + v, 0);
-    if (sum !== total && volumes.length > 0) {
-      const diff = total - sum;
-      const adjusted = volumes[volumes.length - 1] + diff;
+    // Keep the platform total for this base route intact
+    const totalAfter = [...parts.values()].reduce((s, r) => s + (Number(r.orderVolume) || 0), 0);
+    if (totalAfter !== totalBefore) {
+      const adjustPart = !baseVolumeExplicit ? 0 : (lastExplicitPart ?? 0);
+      const row = parts.get(adjustPart)!;
+      const adjusted = (Number(row.orderVolume) || 0) + (totalBefore - totalAfter);
       if (adjusted > 0) {
-        volumes[volumes.length - 1] = adjusted;
-        notes.push(`${op.routeNum}: 反馈件数合计 ${sum} ≠ 货量 ${total}，最后一段已调整为 ${adjusted}`);
+        parts.set(adjustPart, { ...row, orderVolume: adjusted });
+        notes.push(`${op.routeNum}: 为保持货量 ${totalBefore}，${adjustPart === 0 ? '主段' : `第 ${adjustPart} 段`}已调整为 ${adjusted}`);
       } else {
-        notes.push(`${op.routeNum}: 反馈件数合计 ${sum} 与货量 ${total} 差距过大，按反馈原样套用（总量不符，请检查）`);
+        notes.push(`${op.routeNum}: 反馈件数合计与货量 ${totalBefore} 不符，按反馈原样套用（请检查）`);
       }
     }
 
-    const describe = (driverId: string) => {
-      const d = registry[driverId];
-      return {
-        name: d?.name || `Driver ${driverId}`,
-        group: d?.group || (isBrokerRoute ? route.driverGroup : 'Unassigned'),
-      };
-    };
-
-    // First segment replaces the original row; the rest are inserted as cuts
-    const first = describe(op.segments[0].driverId);
-    const updatedFirst: RouteData = {
-      ...route,
-      driverId: op.segments[0].driverId,
-      driverName: first.name,
-      driver: first.name,
-      driverGroup: first.group,
-      orderVolume: volumes[0],
-      isSplit: op.segments.length > 1 ? true : route.isSplit,
-      capacityStatus: undefined,
-      capacityExcess: 0,
-      isDriverOff: false,
-    };
-    const extras: RouteData[] = op.segments.slice(1).map((seg, i) => {
-      const info = describe(seg.driverId);
-      return {
-        ...route,
-        id: `fb-${route.id}-${i}-${Date.now()}`,
-        routeNum: `${route.routeNum}.${i + 1}`,
-        parentId: route.id,
-        isSplit: true,
-        driverId: seg.driverId,
-        driverName: info.name,
-        driver: info.name,
-        driverGroup: info.group,
-        orderVolume: volumes[i + 1],
-        capacityStatus: undefined,
-        capacityExcess: 0,
-        isDriverOff: false,
-      };
-    });
-
-    result = [...result.slice(0, idx), updatedFirst, ...extras, ...result.slice(idx + 1)];
+    const block = [...parts.entries()].sort((a, b) => a[0] - b[0]).map(([, r]) => r);
+    result = [...result.slice(0, insertAt), ...block, ...result.slice(insertAt)];
   }
 
   return { routes: result, notes };

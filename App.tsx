@@ -451,8 +451,10 @@ const FeedbackModal: React.FC<{
     setError('');
     try {
       const { parseFeedbackTextLocal, parseBrokerFeedback } = await import('./services/feedbackParser');
+      // All base routes qualify: a company-owned base can have a broker ".1"
+      // cut that the reply re-assigns (e.g. "5003303 15-1.1").
       const candidates = routes
-        .filter(r => AGENCIES.includes(r.driverGroup || '') && !r.routeNum.includes('.'))
+        .filter(r => !r.routeNum.includes('.'))
         .map(r => ({ routeNum: r.routeNum, orderVolume: r.orderVolume, driverId: r.driverId || '', driverGroup: r.driverGroup || '' }));
       // Rule-based parse first: instant, offline, immune to AI outages.
       let parsed = parseFeedbackTextLocal(text, candidates);
@@ -518,9 +520,12 @@ const FeedbackModal: React.FC<{
             <div className="flex-1 overflow-y-auto p-7 space-y-3">
               {ops.map((op, i) => {
                 const route = routeByNum(op.routeNum);
-                const sum = op.segments.reduce((s, seg) => s + (seg.volume ?? 0), 0);
+                const partRows = routes.filter(r => r.routeNum.startsWith(`${op.routeNum}.`) && /^\d+$/.test(r.routeNum.slice(op.routeNum.length + 1)));
+                const partsTotal = (route?.orderVolume || 0) + partRows.reduce((s, r) => s + (Number(r.orderVolume) || 0), 0);
+                const coversBase = op.segments.some(s => s.partIdx === 0);
                 const hasNull = op.segments.some(s => s.volume === null);
-                const mismatch = route && !hasNull && sum !== route.orderVolume;
+                const givenSum = op.segments.reduce((s, seg) => s + (seg.volume ?? 0), 0);
+                const mismatch = route && coversBase && !hasNull && givenSum !== partsTotal;
                 return (
                   <label key={i} className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${checked[i] ? 'border-orange-200 bg-orange-50/40' : 'border-slate-100 opacity-50'}`}>
                     <input
@@ -532,13 +537,18 @@ const FeedbackModal: React.FC<{
                     <div className="flex-1">
                       <div className="flex items-baseline gap-3 flex-wrap">
                         <span className="font-black text-orange-600 text-sm">{op.routeNum}</span>
-                        {route && <span className="text-[10px] text-slate-400">现在：{route.driverId || '未分配'} · {route.orderVolume} 件</span>}
-                        {mismatch && <span className="text-[10px] font-black text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚠ 件数合计 {sum} ≠ 货量 {route!.orderVolume}，套用时自动调整最后一段</span>}
+                        {route && (
+                          <span className="text-[10px] text-slate-400">
+                            现在：{route.driverId || '未分配'} · {route.orderVolume} 件{partRows.length > 0 && `（另有 ${partRows.length} 个切段）`}
+                          </span>
+                        )}
+                        {mismatch && <span className="text-[10px] font-black text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚠ 件数合计 {givenSum} ≠ 货量 {partsTotal}，套用时自动补差</span>}
                       </div>
                       <div className="flex flex-wrap gap-2 mt-2">
                         {op.segments.map((seg, si) => (
                           <span key={si} className="text-xs font-mono font-bold bg-white border border-slate-200 rounded-lg px-2.5 py-1">
-                            {seg.driverId}{seg.volume !== null ? ` × ${seg.volume}` : ' × 剩余'}
+                            <span className="text-slate-400 mr-1">{seg.partIdx === 0 ? '主' : `.${seg.partIdx}`}</span>
+                            {seg.driverId}{seg.volume !== null ? ` × ${seg.volume}` : ' × 不变/剩余'}
                           </span>
                         ))}
                       </div>
