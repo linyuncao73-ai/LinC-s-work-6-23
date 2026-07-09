@@ -37,4 +37,7 @@ jobs:
         with:
           folder: dist
           branch: gh-pages
-          clean: true
+          # Keep previous hashed chunks so pages opened before a deploy can
+          # still lazy-load their modules (filenames are content-hashed, so
+          # stale files never conflict).
+          clean: false
