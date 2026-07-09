@@ -13,6 +13,113 @@ export interface CandidateRoute {
   driverGroup: string;
 }
 
+// ---------------------------------------------------------------------------
+// Local (deterministic) parser — instant, offline, no AI quota. Handles the
+// five reply styles seen in the field; the AI parser below is the fallback
+// for anything it can't read.
+// ---------------------------------------------------------------------------
+
+interface RawEntry { driverId: string; routeToken: string; volume: number | null }
+
+/** "29-2.1" → { base: "29-2", segIdx: 1 }; "33020-2" → { base: "33020-2", segIdx: 0 } */
+function splitSegSuffix(token: string): { base: string; segIdx: number } {
+  const m = token.match(/^(.*?)\.(\d+)$/);
+  if (m) return { base: m[1], segIdx: parseInt(m[2]) };
+  return { base: token, segIdx: 0 };
+}
+
+/** Resolves shorthand like "29-2", "33018-1", "33022-4-1" to a candidate routeNum. */
+function resolveRoute(baseToken: string, candidates: CandidateRoute[]): string | null {
+  const parts = baseToken.split('-').filter(p => p !== '');
+  if (parts.length < 2) return null;
+  const tokMajor = parts[0];
+  const tokSub = parts[parts.length - 1];
+  for (const c of candidates) {
+    if (c.routeNum === baseToken) return c.routeNum;
+    const cp = c.routeNum.split('-');
+    const cMajor = cp[0];
+    const cSub = cp[cp.length - 1];
+    const majorMatch = cMajor === tokMajor || (tokMajor.length >= 2 && cMajor.endsWith(tokMajor));
+    if (majorMatch && cSub === tokSub) {
+      // 3-part tokens must also match the middle part
+      if (parts.length >= 3 && cp.length >= 3 && parts[1] !== cp[1]) continue;
+      return c.routeNum;
+    }
+  }
+  return null;
+}
+
+const cleanRouteToken = (s: string) => s.replace(/\s+/g, '').replace(/\.+$/, '');
+
+function parseLine(line: string): RawEntry[] {
+  // WhatsApp copies often carry invisible characters (word joiners, ZWSP)
+  const t = line.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/^[•\-\*\s]+/, '').trim();
+  if (!t || /^(sum|total|tomorrow|thanks|some changes|driver id\s*$)/i.test(t)) return [];
+
+  // Christ: "Driver ID 19749: 33020 - 2 (1 - 150)"
+  let m = t.match(/^Driver\s*ID\s*(\d{3,7})\s*[:：]\s*([\d\s\-.]+?)(?:\((\d+)\s*-\s*(\d+)\))?\s*$/i);
+  if (m) {
+    const vol = m[3] !== undefined ? parseInt(m[4]) - parseInt(m[3]) + 1 : null;
+    return [{ driverId: m[1], routeToken: cleanRouteToken(m[2]), volume: vol }];
+  }
+
+  // Our own report format echoed back: "• 15165 @ 06:00 AM (#33018-1) [Orleans E] [147]"
+  m = t.match(/^(\d{3,7})\s*@[^(]*\(#\s*([\d\-. ]+)\)(.*)$/);
+  if (m) {
+    const volMatches = [...(m[3] || '').matchAll(/\[(\d+)\]/g)];
+    const vol = volMatches.length > 0 ? parseInt(volMatches[volMatches.length - 1][1]) : null;
+    return [{ driverId: m[1], routeToken: cleanRouteToken(m[2]), volume: vol }];
+  }
+
+  // Kaneza: "22-1: 20059(190) to 12588(100)" / "22-3: a(x),b(y),c(z)" / "22-4: 19523"
+  m = t.match(/^([\d\s\-.]+?)\s*[:：]\s*(.+)$/);
+  if (m && /^\d/.test(m[1])) {
+    const routeToken = cleanRouteToken(m[1]);
+    const rhs = m[2];
+    const entries: RawEntry[] = [];
+    for (const seg of rhs.matchAll(/(\d{3,7})\s*(?:\(\s*(\d+)\s*\))?/g)) {
+      entries.push({ driverId: seg[1], routeToken, volume: seg[2] !== undefined ? parseInt(seg[2]) : null });
+    }
+    return entries;
+  }
+
+  // Parfait: "28715-33018-2. 135pkges" / "29155-33019-1.1"
+  m = t.match(/^(\d{4,7})\s*-\s*(33[\d\-. ]+?)\.?\s*(?:(\d+)\s*pk?ge?s?)?\s*$/i);
+  if (m) {
+    return [{ driverId: m[1], routeToken: cleanRouteToken(m[2]), volume: m[3] !== undefined ? parseInt(m[3]) : null }];
+  }
+
+  // Alain / generic: "18944  29-1  #120" / "19994 14-1" / "18944 29-1 120件"
+  m = t.match(/^(\d{3,7})\s+([\d\-. ]+?)(?:\s*[#＃]\s*(\d+)|\s+(\d+)\s*件)?\s*$/);
+  if (m && m[2].includes('-')) {
+    const vol = m[3] !== undefined ? parseInt(m[3]) : m[4] !== undefined ? parseInt(m[4]) : null;
+    return [{ driverId: m[1], routeToken: cleanRouteToken(m[2]), volume: vol }];
+  }
+
+  return [];
+}
+
+/** Deterministic parse of the whole reply. Returns [] when nothing matched. */
+export function parseFeedbackTextLocal(text: string, candidates: CandidateRoute[]): FeedbackOp[] {
+  const grouped = new Map<string, { segIdx: number; order: number; seg: FeedbackSegment }[]>();
+  let order = 0;
+  for (const line of text.split(/\r?\n/)) {
+    for (const entry of parseLine(line)) {
+      const { base, segIdx } = splitSegSuffix(entry.routeToken);
+      const routeNum = resolveRoute(base, candidates);
+      if (!routeNum) continue;
+      if (!grouped.has(routeNum)) grouped.set(routeNum, []);
+      grouped.get(routeNum)!.push({ segIdx, order: order++, seg: { driverId: entry.driverId, volume: entry.volume } });
+    }
+  }
+  const ops: FeedbackOp[] = [];
+  for (const [routeNum, items] of grouped) {
+    items.sort((a, b) => a.segIdx - b.segIdx || a.order - b.order);
+    ops.push({ routeNum, segments: items.map(i => i.seg) });
+  }
+  return ops;
+}
+
 /**
  * Parses a broker's free-form WhatsApp reply into structured assignments.
  * Every broker writes differently; the prompt teaches the model the real

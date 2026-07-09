@@ -436,11 +436,15 @@ const FeedbackModal: React.FC<{
     setPhase('parsing');
     setError('');
     try {
-      const { parseBrokerFeedback } = await import('./services/feedbackParser');
+      const { parseFeedbackTextLocal, parseBrokerFeedback } = await import('./services/feedbackParser');
       const candidates = routes
         .filter(r => AGENCIES.includes(r.driverGroup || '') && !r.routeNum.includes('.'))
         .map(r => ({ routeNum: r.routeNum, orderVolume: r.orderVolume, driverId: r.driverId || '', driverGroup: r.driverGroup || '' }));
-      const parsed = await parseBrokerFeedback(text, candidates);
+      // Rule-based parse first: instant, offline, immune to AI outages.
+      let parsed = parseFeedbackTextLocal(text, candidates);
+      if (parsed.length === 0) {
+        parsed = await parseBrokerFeedback(text, candidates);
+      }
       if (parsed.length === 0) {
         setError('没有解析出任何派工内容。请确认粘贴的是中介的回复文字，且这些路线已经分给了中介团队。');
         setPhase('input');
