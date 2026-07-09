@@ -529,7 +529,18 @@ export interface EbinderDriverRow {
   driverId: string;
   driverName: string;
   maxCapacity: number | null;
+  /** One-time leave written as text on the sheet, e.g. "7-10" */
   offDates: string[];
+  /** Fixed weekly days off (red cells), JS getDay convention: 0=Sunday … 6=Saturday */
+  fixedOffWeekdays?: number[];
+}
+
+/** MM/DD/YYYY → JS weekday (0=Sunday … 6=Saturday), or null if unparseable */
+export function weekdayOfBatchDate(batchDate: string): number | null {
+  const parts = String(batchDate).split('/').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  const d = new Date(parts[2], parts[0] - 1, parts[1]);
+  return isNaN(d.getTime()) ? null : d.getDay();
 }
 
 export interface EbinderData {
@@ -575,10 +586,11 @@ export function ebinderDateMatchesBatchDate(ebDate: string, batchDate: string): 
 
 export function getOffDriverIds(ebinder: EbinderData, batchDate: string): Set<string> {
   const offSet = new Set<string>();
+  const weekday = weekdayOfBatchDate(batchDate);
   for (const d of ebinder.drivers) {
-    if (d.offDates.some(od => ebinderDateMatchesBatchDate(od, batchDate))) {
-      offSet.add(d.driverId);
-    }
+    const oneTimeOff = d.offDates.some(od => ebinderDateMatchesBatchDate(od, batchDate));
+    const fixedOff = weekday !== null && (d.fixedOffWeekdays || []).includes(weekday);
+    if (oneTimeOff || fixedOff) offSet.add(d.driverId);
   }
   return offSet;
 }

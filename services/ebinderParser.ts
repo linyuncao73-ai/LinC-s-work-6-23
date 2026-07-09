@@ -75,6 +75,8 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     Your task:
     1. Find all date column headers, left to right. For each output:
        - date: the header text (e.g. "7-6")
+       - weekday: the weekday shown under/above the date for that column
+         ("Monday" … "Sunday" — the sheet has a weekday header row)
        - xmin / xmax: the horizontal span of that column (normalized 0-1000)
     2. For each driver row where Column B has a numeric ID, extract:
        - driverId (Column B, numbers only as string)
@@ -113,10 +115,11 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
               type: Type.OBJECT,
               properties: {
                 date: { type: Type.STRING, description: "Header text, e.g. '7-6'" },
+                weekday: { type: Type.STRING, enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], description: "Weekday header of this column" },
                 xmin: { type: Type.NUMBER, description: "Left edge of the column, normalized 0-1000" },
                 xmax: { type: Type.NUMBER, description: "Right edge of the column, normalized 0-1000" }
               },
-              required: ["date", "xmin", "xmax"]
+              required: ["date", "weekday", "xmin", "xmax"]
             },
             description: "Date column headers left to right with their horizontal spans"
           },
@@ -152,11 +155,29 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
 
   const raw = JSON.parse(response.text || "{}");
 
-  const weekCols: { date: string; xmin: number; xmax: number }[] = Array.isArray(raw.weekDates)
+  const WEEKDAY_NUM: Record<string, number> = {
+    sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+  };
+  // Fallback when the model didn't read the weekday header: derive from the
+  // date using the current Ottawa year.
+  const weekdayFromDate = (dateStr: string): number | null => {
+    const norm = normalizeEbinderDate(dateStr);
+    if (!norm) return null;
+    const year = new Date().getFullYear();
+    const d = new Date(year, norm.m - 1, norm.d);
+    return isNaN(d.getTime()) ? null : d.getDay();
+  };
+
+  const weekCols: { date: string; weekday: number | null; xmin: number; xmax: number }[] = Array.isArray(raw.weekDates)
     ? raw.weekDates
         .map((w: any) => (typeof w === 'string'
-          ? { date: w, xmin: NaN, xmax: NaN }
-          : { date: String(w?.date || ''), xmin: Number(w?.xmin), xmax: Number(w?.xmax) }))
+          ? { date: w, weekday: weekdayFromDate(w), xmin: NaN, xmax: NaN }
+          : {
+              date: String(w?.date || ''),
+              weekday: WEEKDAY_NUM[String(w?.weekday || '').toLowerCase()] ?? weekdayFromDate(String(w?.date || '')),
+              xmin: Number(w?.xmin),
+              xmax: Number(w?.xmax),
+            }))
         .filter((w: any) => w.date !== '')
     : [];
   const weekDates: string[] = weekCols.map(w => w.date);
@@ -171,6 +192,7 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
     .filter((d: any) => /^\d+$/.test(String(d.driverId || '').trim()))
     .map((d: any) => {
       const offDates = new Set<string>();
+      const fixedOffWeekdays = new Set<number>();
       const rowValid = img && Number.isFinite(Number(d.ymin)) && Number.isFinite(Number(d.ymax)) && Number(d.ymax) > Number(d.ymin);
       const modelColors: string[] = Array.isArray(d.dayColors) ? d.dayColors : [];
 
@@ -184,9 +206,9 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
         } else {
           red = String(modelColors[i] || '').toLowerCase() === 'red';
         }
-        if (red) {
-          const norm = normalizeEbinderDate(col.date);
-          if (norm) offDates.add(`${norm.m}-${norm.d}`);
+        if (red && col.weekday !== null) {
+          // Red cell = the driver's FIXED weekly day off (survives past this week)
+          fixedOffWeekdays.add(col.weekday);
         }
       }
       // One-time leave written as text, e.g. "7.6 off"
@@ -201,6 +223,7 @@ export async function parseEbinderImage(file: File): Promise<EbinderData> {
         driverName:  String(d.driverName || ''),
         maxCapacity: typeof d.maxCapacity === 'number' && d.maxCapacity > 0 ? d.maxCapacity : null,
         offDates:    [...offDates],
+        fixedOffWeekdays: [...fixedOffWeekdays],
       };
     });
 

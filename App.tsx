@@ -387,8 +387,8 @@ const AvailabilityPanel: React.FC<{
           <p className="text-[10px] text-slate-400 mt-0.5">For tomorrow · {batchDate}{parsedAgo !== null && ` · Parsed ${parsedAgo < 1 ? 'just now' : `${parsedAgo}m ago`}`}</p>
         </div>
         <div className="flex items-center gap-3">
-          {parsedAgo !== null && parsedAgo > 1440 && (
-            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200" title="上传新的 e-binder 或手动点选司机">E-binder 数据已过时（{Math.round(parsedAgo / 1440)} 天前）</span>
+          {parsedAgo !== null && parsedAgo > 7 * 1440 && (
+            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200" title="固定休息日仍然有效；一次性请假请重新上传或手动点选">E-binder 上传于 {Math.round(parsedAgo / 1440)} 天前，固定休息日如有变化请重新上传</span>
           )}
           <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
           <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
@@ -1453,11 +1453,9 @@ const App: React.FC = () => {
   const [ebinderData, setEbinderData] = useState<EbinderData | null>(() => {
     const saved = localStorage.getItem('yow_dispatch_ebinder');
     try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      // A stale sheet silently marking last week's offs is worse than none:
-      // drop e-binder data older than 5 days and fall back to manual picking.
-      if (parsed && Date.now() - (parsed.parsedAt || 0) > 5 * 86400000) return null;
-      return parsed;
+      // Red cells now carry fixed weekly days off, which stay valid across
+      // weeks — keep the data; one-time text offs simply stop matching.
+      return saved ? JSON.parse(saved) : null;
     } catch { return null; }
   });
   const [ebinderManualOverrides, setEbinderManualOverrides] = useState<Record<string, boolean>>(() => {
