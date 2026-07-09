@@ -97,3 +97,53 @@ export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedA
   }
   return { data, updatedAt: rows[0].updated_at };
 }
+
+// ---- Roster row: the driver registry has its own cloud row so it syncs
+// ---- independently of the daily dispatch snapshot.
+
+const ROSTER_ID = 'yow-roster';
+
+export interface RosterPayload {
+  registry: DriverRegistry;
+  deletedDriverIds: string[];
+  savedAt: string;
+}
+
+export async function saveRoster(payload: RosterPayload): Promise<void> {
+  const { url, key } = getConfig();
+  const passcode = getTeamPasscode();
+  const body = passcode ? await encryptJson(payload, passcode) : payload;
+  const res = await fetch(`${url}/rest/v1/dispatch_snapshots`, {
+    method: 'POST',
+    headers: {
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ id: ROSTER_ID, data: body, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`名册上传失败（HTTP ${res.status}）。${text.slice(0, 200)}`);
+  }
+}
+
+export async function loadRoster(): Promise<{ data: RosterPayload; updatedAt: string } | null> {
+  const { url, key } = getConfig();
+  const res = await fetch(
+    `${url}/rest/v1/dispatch_snapshots?id=eq.${ROSTER_ID}&select=data,updated_at`,
+    { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
+  );
+  if (!res.ok) return null;
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let data = rows[0].data;
+  if (isEncryptedPayload(data)) {
+    const passcode = getTeamPasscode();
+    if (!passcode) return null; // can't decrypt yet — keep local roster
+    data = await decryptJson(data, passcode);
+  }
+  if (!data || typeof data.registry !== 'object') return null;
+  return { data, updatedAt: rows[0].updated_at };
+}

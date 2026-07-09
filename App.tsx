@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { parseExcelFile } from './services/excelParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
-import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
+import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
@@ -544,9 +544,11 @@ const FeedbackModal: React.FC<{
 
 const DriversView: React.FC<{
   registry: DriverRegistry;
+  dirty: boolean;
   onUpsert: (id: string, entry: { name: string; group: string; maxCapacity?: number }) => void;
   onDelete: (id: string) => void;
-}> = ({ registry, onUpsert, onDelete }) => {
+  onPush: () => void;
+}> = ({ registry, dirty, onUpsert, onDelete, onPush }) => {
   const [search, setSearch] = useState('');
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
@@ -578,14 +580,26 @@ const DriversView: React.FC<{
       <div className="bg-slate-50 border-b border-slate-100 px-8 py-4 flex flex-wrap justify-between items-center gap-4">
         <div>
           <h3 className="text-lg font-black text-slate-800">Driver Roster</h3>
-          <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">{Object.keys(registry).length} drivers · 改动自动保存，随 ☁ 云同步共享</p>
+          <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">
+            {Object.keys(registry).length} drivers · 改完点 Update 上传，其他电脑打开自动拉取
+            {dirty && <span className="text-red-500 ml-2">● 本机有未上传的改动</span>}
+          </p>
         </div>
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="搜索 ID 或名字…"
-          className="px-4 py-2 border-2 border-slate-100 rounded-xl text-xs focus:border-orange-400 focus:outline-none w-48"
-        />
+        <div className="flex items-center gap-3">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="搜索 ID 或名字…"
+            className="px-4 py-2 border-2 border-slate-100 rounded-xl text-xs focus:border-orange-400 focus:outline-none w-48"
+          />
+          <button
+            onClick={onPush}
+            className={`relative px-6 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 shadow-lg ${dirty ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-100 animate-pulse' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-100'}`}
+            title="需要修改密码"
+          >
+            <i className="fa-solid fa-lock text-[10px]"></i> Update to Supabase
+          </button>
+        </div>
       </div>
       <div className="px-8 py-4 bg-orange-50/40 border-b border-slate-100 flex flex-wrap items-end gap-3">
         <div>
@@ -1402,6 +1416,8 @@ const App: React.FC = () => {
   const [deletedDriverIds, setDeletedDriverIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]'); } catch { return []; }
   });
+  // True while this browser has roster edits not yet pushed to Supabase
+  const [rosterDirty, setRosterDirty] = useState(() => localStorage.getItem('yow_roster_dirty') === '1');
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
     const saved = localStorage.getItem('yow_dispatch_registry');
     let tombstones: string[] = [];
@@ -1511,14 +1527,61 @@ const App: React.FC = () => {
     savedAt: new Date().toISOString(),
   });
 
+  const markRosterDirty = (dirty: boolean) => {
+    setRosterDirty(dirty);
+    try { localStorage.setItem('yow_roster_dirty', dirty ? '1' : '0'); } catch { /* non-fatal */ }
+  };
+
   const handleUpsertDriver = (id: string, entry: { name: string; group: string; maxCapacity?: number }) => {
     setRegistry(prev => ({ ...prev, [id]: { ...entry, edited: true } }));
     setDeletedDriverIds(prev => prev.filter(x => x !== id));
+    markRosterDirty(true);
   };
 
   const handleDeleteDriver = (id: string) => {
     setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
     setDeletedDriverIds(prev => [...new Set([...prev, id])]);
+    markRosterDirty(true);
+  };
+
+  const applyCloudRoster = (reg: DriverRegistry, deleted: string[]) => {
+    const validGroups = new Set(['Company', 'Unassigned', ...AGENCIES]);
+    const cleaned: DriverRegistry = {};
+    for (const [id, d] of Object.entries(reg)) {
+      if (validGroups.has(d.group) && !REMOVED_DRIVER_IDS.includes(id) && !deleted.includes(id)) cleaned[id] = d;
+    }
+    setRegistry(cleaned);
+    setDeletedDriverIds(deleted);
+  };
+
+  // On startup, pull the shared roster from Supabase — unless this browser
+  // has local edits that haven't been pushed yet (they'd be lost).
+  useEffect(() => {
+    if (rosterDirty) return;
+    (async () => {
+      try {
+        const result = await loadRoster();
+        if (result) applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
+      } catch { /* offline or unconfigured — keep local roster */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRosterPush = async () => {
+    const pw = window.prompt('输入修改密码后上传名册到 Supabase：');
+    if (pw === null) return;
+    if (pw !== '1011') {
+      setCloudStatus({ type: 'error', message: '密码不对，名册未上传。' });
+      return;
+    }
+    setCloudStatus({ type: 'loading', message: '正在上传名册到 Supabase…' });
+    try {
+      await saveRoster({ registry, deletedDriverIds, savedAt: new Date().toISOString() });
+      markRosterDirty(false);
+      setCloudStatus({ type: 'success', message: `名册已更新到 Supabase（${Object.keys(registry).length} 名司机）。其他电脑打开网页会自动拉取。` });
+    } catch (err: any) {
+      setCloudStatus({ type: 'error', message: err.message || '名册上传失败，请重试' });
+    }
   };
 
   const handleApplyFeedback = async (ops: FeedbackOp[]) => {
@@ -2116,7 +2179,7 @@ const App: React.FC = () => {
                     {view === 'bookmarks' ? (
                       <BookmarksView />
                     ) : view === 'drivers' ? (
-                      <DriversView registry={registry} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} />
+                      <DriversView registry={registry} dirty={rosterDirty} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} onPush={handleRosterPush} />
                     ) : showLanding ? (
                       /* Show the full landing page if on a data-driven view with no data */
                       <div className="py-20 text-center max-w-2xl mx-auto">

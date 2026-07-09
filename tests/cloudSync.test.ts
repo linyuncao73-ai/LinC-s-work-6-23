@@ -70,6 +70,31 @@ describe('cloudSync', () => {
     expect((loaded?.data as any).routes).toEqual([1, 2]);
   });
 
+  it('round-trips the roster row independently of the snapshot', async () => {
+    const { saveRoster, loadRoster } = await import('../services/cloudSync');
+    let savedBody: any = null;
+    (globalThis as any).fetch = vi.fn(async (_url: string, opts?: any) => {
+      if (opts?.method === 'POST') {
+        savedBody = JSON.parse(opts.body);
+        return { ok: true, text: async () => '' };
+      }
+      return { ok: true, json: async () => [{ data: savedBody.data, updated_at: savedBody.updated_at }] };
+    });
+
+    await saveRoster({ registry: { '19492': { name: 'Fath', group: 'Company' } }, deletedDriverIds: ['2218'], savedAt: 'x' });
+    expect(savedBody.id).toBe('yow-roster');
+
+    const loaded = await loadRoster();
+    expect(loaded?.data.registry['19492'].name).toBe('Fath');
+    expect(loaded?.data.deletedDriverIds).toEqual(['2218']);
+  });
+
+  it('loadRoster returns null instead of throwing when unreachable', async () => {
+    const { loadRoster } = await import('../services/cloudSync');
+    (globalThis as any).fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    expect(await loadRoster()).toBeNull();
+  });
+
   it('encrypts when a team passcode is set and decrypts on load', async () => {
     const { saveSnapshot, loadSnapshot, setTeamPasscode } = await import('../services/cloudSync');
     setTeamPasscode('yow2026');
