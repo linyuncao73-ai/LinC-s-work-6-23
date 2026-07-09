@@ -4,6 +4,7 @@ import { parseExcelFile } from './services/excelParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
+import type { FeedbackOp } from './services/feedbackParser';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
   const [value, setValue] = useState(getStoredApiKey());
@@ -411,6 +412,132 @@ const AvailabilityPanel: React.FC<{
         })}
       </div>
       <p className="text-[9px] text-slate-400 mt-3">Click a driver to manually toggle. Run Auto-Assign to apply changes.</p>
+    </div>
+  );
+};
+
+const FeedbackModal: React.FC<{
+  routes: RouteData[];
+  registry: DriverRegistry;
+  onClose: () => void;
+  onApply: (ops: FeedbackOp[]) => void;
+}> = ({ routes, registry, onClose, onApply }) => {
+  const [text, setText] = useState('');
+  const [phase, setPhase] = useState<'input' | 'parsing' | 'preview'>('input');
+  const [ops, setOps] = useState<FeedbackOp[]>([]);
+  const [checked, setChecked] = useState<Record<number, boolean>>({});
+  const [error, setError] = useState('');
+
+  const parse = async () => {
+    setPhase('parsing');
+    setError('');
+    try {
+      const { parseBrokerFeedback } = await import('./services/feedbackParser');
+      const candidates = routes
+        .filter(r => AGENCIES.includes(r.driverGroup || '') && !r.routeNum.includes('.'))
+        .map(r => ({ routeNum: r.routeNum, orderVolume: r.orderVolume, driverId: r.driverId || '', driverGroup: r.driverGroup || '' }));
+      const parsed = await parseBrokerFeedback(text, candidates);
+      if (parsed.length === 0) {
+        setError('没有解析出任何派工内容。请确认粘贴的是中介的回复文字，且这些路线已经分给了中介团队。');
+        setPhase('input');
+        return;
+      }
+      setOps(parsed);
+      setChecked(Object.fromEntries(parsed.map((_, i) => [i, true])));
+      setPhase('preview');
+    } catch (err: any) {
+      setError(err.message || '解析失败，请重试');
+      setPhase('input');
+    }
+  };
+
+  const routeByNum = (num: string) => routes.find(r => r.routeNum === num);
+  const selectedCount = ops.filter((_, i) => checked[i]).length;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
+      <div className="bg-white rounded-[32px] shadow-2xl border border-slate-100 w-full max-w-2xl relative flex flex-col max-h-[85vh]">
+        <div className="p-7 border-b border-slate-50 flex-shrink-0">
+          <h3 className="text-xl font-black text-slate-800">粘贴中介反馈</h3>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
+            {phase === 'preview' ? '确认改动后一键套用' : '把中介回复的文字整段粘进来，AI 自动解析成改动清单'}
+          </p>
+        </div>
+
+        {phase !== 'preview' ? (
+          <>
+            <div className="p-7 flex-1 overflow-y-auto">
+              <textarea
+                value={text}
+                onChange={e => setText(e.target.value)}
+                placeholder={"例如：\n19994  14-1\n18944  29-1  #120\n18943  29-1.1  #67\n22-1: 20059(190) to 12588(100)\nDriver ID 19749: 33020 - 2 (1 - 150)"}
+                className="w-full h-64 px-5 py-4 border-2 border-slate-100 rounded-2xl text-xs font-mono focus:border-orange-400 focus:outline-none resize-none"
+                autoFocus
+              />
+              {error && <p className="text-xs text-red-600 font-bold mt-3">{error}</p>}
+              {phase === 'parsing' && (
+                <p className="text-xs text-blue-600 font-bold mt-3"><i className="fa-solid fa-spinner animate-spin mr-1"></i>正在解析（模型繁忙时会自动重试）…</p>
+              )}
+            </div>
+            <div className="p-7 bg-slate-50 grid grid-cols-2 gap-4 flex-shrink-0">
+              <button onClick={onClose} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">Cancel</button>
+              <button
+                onClick={parse}
+                disabled={!text.trim() || phase === 'parsing'}
+                className="px-6 py-4 rounded-2xl bg-slate-900 text-white font-black text-xs hover:bg-slate-800 transition-all shadow-lg disabled:opacity-40"
+              >
+                解析反馈 →
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex-1 overflow-y-auto p-7 space-y-3">
+              {ops.map((op, i) => {
+                const route = routeByNum(op.routeNum);
+                const sum = op.segments.reduce((s, seg) => s + (seg.volume ?? 0), 0);
+                const hasNull = op.segments.some(s => s.volume === null);
+                const mismatch = route && !hasNull && sum !== route.orderVolume;
+                return (
+                  <label key={i} className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${checked[i] ? 'border-orange-200 bg-orange-50/40' : 'border-slate-100 opacity-50'}`}>
+                    <input
+                      type="checkbox"
+                      checked={!!checked[i]}
+                      onChange={() => setChecked(prev => ({ ...prev, [i]: !prev[i] }))}
+                      className="mt-1"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-baseline gap-3 flex-wrap">
+                        <span className="font-black text-orange-600 text-sm">{op.routeNum}</span>
+                        {route && <span className="text-[10px] text-slate-400">现在：{route.driverId || '未分配'} · {route.orderVolume} 件</span>}
+                        {mismatch && <span className="text-[10px] font-black text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚠ 件数合计 {sum} ≠ 货量 {route!.orderVolume}，套用时自动调整最后一段</span>}
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {op.segments.map((seg, si) => (
+                          <span key={si} className="text-xs font-mono font-bold bg-white border border-slate-200 rounded-lg px-2.5 py-1">
+                            {seg.driverId}{seg.volume !== null ? ` × ${seg.volume}` : ' × 剩余'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="p-7 bg-slate-50 grid grid-cols-2 gap-4 flex-shrink-0">
+              <button onClick={() => setPhase('input')} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">← 改文字重新解析</button>
+              <button
+                onClick={() => onApply(ops.filter((_, i) => checked[i]))}
+                disabled={selectedCount === 0}
+                className="px-6 py-4 rounded-2xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 transition-all shadow-lg disabled:opacity-40"
+              >
+                套用 {selectedCount} 条改动 ✓
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 };
@@ -983,7 +1110,8 @@ const MainEditor: React.FC<{
     onDeleteRow: (id: string) => void,
     onOpenSplit: (route: RouteData) => void,
     onOpenReassign: (route: RouteData) => void,
-}> = ({ routes, registry, offDriverIds, onUpdate, onAddRow, onDeleteRow, onOpenSplit, onOpenReassign }) => {
+    onOpenFeedback: () => void,
+}> = ({ routes, registry, offDriverIds, onUpdate, onAddRow, onDeleteRow, onOpenSplit, onOpenReassign, onOpenFeedback }) => {
     const [teamFilter, setTeamFilter] = useState<string>('All');
     const sortedRoutes = useMemo(() => [...routes].sort((a, b) => compareRouteNums(a.routeNum, b.routeNum)), [routes]);
 
@@ -1007,9 +1135,14 @@ const MainEditor: React.FC<{
                     <h3 className="text-lg font-black text-slate-800">Route Spreadsheet</h3>
                     <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Interactive Schedule Editor</p>
                 </div>
-                <button onClick={onAddRow} className="bg-slate-900 text-white px-6 py-2 rounded-xl text-xs font-black hover:bg-slate-800 transition-all flex items-center gap-2 shadow-lg shadow-slate-100">
-                    <i className="fa-solid fa-plus"></i> Add New Route
-                </button>
+                <div className="flex items-center gap-3">
+                  <button onClick={onOpenFeedback} className="bg-emerald-600 text-white px-6 py-2 rounded-xl text-xs font-black hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-100">
+                      <i className="fa-solid fa-paste"></i> 粘贴中介反馈
+                  </button>
+                  <button onClick={onAddRow} className="bg-slate-900 text-white px-6 py-2 rounded-xl text-xs font-black hover:bg-slate-800 transition-all flex items-center gap-2 shadow-lg shadow-slate-100">
+                      <i className="fa-solid fa-plus"></i> Add New Route
+                  </button>
+                </div>
             </div>
             {routes.length > 0 && (
               <div className="px-8 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
@@ -1322,6 +1455,7 @@ const App: React.FC = () => {
   const ebinderInputRef = useRef<HTMLInputElement>(null);
   const [reassigningRoute, setReassigningRoute] = useState<RouteData | null>(null);
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(() => !!getStoredApiKey());
   const [cloudStatus, setCloudStatus] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
@@ -1385,6 +1519,17 @@ const App: React.FC = () => {
   const handleDeleteDriver = (id: string) => {
     setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
     setDeletedDriverIds(prev => [...new Set([...prev, id])]);
+  };
+
+  const handleApplyFeedback = async (ops: FeedbackOp[]) => {
+    const { applyFeedbackOps } = await import('./services/feedbackParser');
+    const { routes: next, notes } = applyFeedbackOps(routes, ops, registry);
+    setRoutes(next);
+    setShowFeedbackModal(false);
+    setCloudStatus({
+      type: 'success',
+      message: `已套用 ${ops.length} 条中介反馈${notes.length ? ' · ' + notes.join('；') : ''}`,
+    });
   };
 
   const applySnapshot = (snap: DispatchSnapshot) => {
@@ -1995,7 +2140,7 @@ const App: React.FC = () => {
                     ) : (
                       /* Regular Views with Data */
                       <>
-                        {view === 'main' && <MainEditor routes={routes} registry={registry} offDriverIds={offDriverIdsFinal} onUpdate={onUpdateRoute} onDeleteRow={onDeleteRoute} onAddRow={addEmptyRow} onOpenSplit={setSplittingRoute} onOpenReassign={setReassigningRoute} />}
+                        {view === 'main' && <MainEditor routes={routes} registry={registry} offDriverIds={offDriverIdsFinal} onUpdate={onUpdateRoute} onDeleteRow={onDeleteRoute} onAddRow={addEmptyRow} onOpenSplit={setSplittingRoute} onOpenReassign={setReassigningRoute} onOpenFeedback={() => setShowFeedbackModal(true)} />}
                         {view === 'reports' && <WhatsAppReports groups={groupedData} batchInfo={batchInfo} />}
                         {view === 'allocations' && <AllocationSummaryView routes={routes} />}
                         {view === 'print' && <PrintView routes={routes} batchInfo={batchInfo} />}
@@ -2033,6 +2178,14 @@ const App: React.FC = () => {
           />
         )}
         {showApiKeyModal && <ApiKeyModal onClose={() => setShowApiKeyModal(false)} onSaved={setHasApiKey} />}
+        {showFeedbackModal && (
+          <FeedbackModal
+            routes={routes}
+            registry={registry}
+            onClose={() => setShowFeedbackModal(false)}
+            onApply={handleApplyFeedback}
+          />
+        )}
     </div>
   );
 };
