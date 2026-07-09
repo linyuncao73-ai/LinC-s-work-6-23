@@ -388,9 +388,8 @@ const AvailabilityPanel: React.FC<{
         </div>
         <div className="flex items-center gap-3">
           {parsedAgo !== null && parsedAgo > 7 * 1440 && (
-            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200" title="固定休息日仍然有效；一次性请假请重新上传或手动点选">E-binder 上传于 {Math.round(parsedAgo / 1440)} 天前，固定休息日如有变化请重新上传</span>
+            <span className="bg-yellow-100 text-yellow-700 text-[9px] font-black px-2 py-1 rounded-lg border border-yellow-200" title="固定休息日仍然有效；一次性请假请手动点选">E-binder 上传于 {Math.round(parsedAgo / 1440)} 天前，固定休息日如有变化请重新上传</span>
           )}
-          <span className="text-[10px] font-black text-slate-500">{offCount} off · {companyDrivers.length - offCount} available</span>
           <button onClick={onClose} className="text-slate-300 hover:text-slate-500 transition-all p-1"><i className="fa-solid fa-xmark"></i></button>
         </div>
       </div>
@@ -411,7 +410,12 @@ const AvailabilityPanel: React.FC<{
           );
         })}
       </div>
-      <p className="text-[9px] text-slate-400 mt-3">Click a driver to manually toggle. Run Auto-Assign to apply changes.</p>
+      <div className="flex justify-between items-center mt-3">
+        <p className="text-[9px] text-slate-400">Click a driver to manually toggle. Run Auto-Assign to apply changes.</p>
+        <span className={`text-[11px] font-black px-3 py-1 rounded-lg ${offCount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+          {offCount} off tomorrow · {companyDrivers.length - offCount} available
+        </span>
+      </div>
     </div>
   );
 };
@@ -1401,7 +1405,6 @@ const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo }> = ({ 
 const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   
   const [batchInfo, setBatchInfo] = useState<BatchInfo>(() => {
@@ -1738,8 +1741,12 @@ const App: React.FC = () => {
       const data = await parseImageFile(file, registry);
       setRoutes(data.routes);
       setBatchInfo(data.batchInfo);
+      // A new day's screenshot starts a fresh availability slate: one-time
+      // manual off marks reset; fixed weekly days off persist via ebinderData.
+      setEbinderManualOverrides({});
       setHasStarted(true);
       setView('main');
+      setCloudStatus({ type: 'success', message: `已导入截图（${data.routes.length} 条路线）· 手动请假标记已重置，固定休息日保留` });
     } catch (err: any) { setCloudStatus({ type: 'error', message: `截图导入失败：${err.message || '未知错误'}` }); }
     finally { setLoading(false); e.target.value = ''; }
   };
@@ -2054,54 +2061,12 @@ const App: React.FC = () => {
             {/* Action Bar (Uploads & Stats) */}
             {!loading && (view !== 'main' || !showLanding) && (
               <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-6 mb-6">
-                  <div onClick={() => fileInputRef.current?.click()} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-orange-500 hover:shadow-lg transition-all">
-                      <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".xlsx,.xls" />
-                      <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-500"><i className="fa-solid fa-file-arrow-up"></i></div>
-                      <div><p className="text-[10px] font-black uppercase text-slate-400">Excel</p><h4 className="font-bold">Update Data</h4></div>
-                  </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6 mb-6">
                   <div onClick={() => imageInputRef.current?.click()} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-purple-500 hover:shadow-lg transition-all">
                       <input type="file" ref={imageInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
                       <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-500"><i className="fa-solid fa-camera"></i></div>
                       <div><p className="text-[10px] font-black uppercase text-slate-400">Screenshot</p><h4 className="font-bold">Import Image</h4></div>
                   </div>
-                  <div
-                    onClick={() => ebinderInputRef.current?.click()}
-                    className={`bg-white p-6 rounded-3xl shadow-sm border flex items-center gap-4 cursor-pointer hover:shadow-lg transition-all ${ebinderLoading ? 'border-blue-300 shadow-blue-100 shadow-sm' : ebinderData ? 'border-emerald-200 hover:border-emerald-500' : 'border-slate-100 hover:border-emerald-500'}`}
-                  >
-                    <input type="file" ref={ebinderInputRef} onChange={handleEbinderUpload} className="hidden" accept="image/*" />
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${ebinderLoading ? 'bg-emerald-50' : ebinderData ? 'bg-emerald-100' : 'bg-emerald-50'}`}>
-                      {ebinderLoading
-                        ? <i className="fa-solid fa-spinner animate-spin text-emerald-500"></i>
-                        : <i className="fa-solid fa-calendar-check text-emerald-500"></i>
-                      }
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black uppercase text-slate-400">E-Binder</p>
-                      <h4 className="font-bold">{ebinderLoading ? 'Parsing...' : ebinderData ? 'Availability Loaded' : 'Upload Availability'}</h4>
-                      {ebinderData && offDriverIdsFinal.size > 0 && (
-                        <p className="text-[9px] text-amber-600 font-bold mt-0.5">{offDriverIdsFinal.size} off tomorrow</p>
-                      )}
-                      {ebinderData && offDriverIdsFinal.size === 0 && (
-                        <p className="text-[9px] text-emerald-600 font-bold mt-0.5">All drivers available</p>
-                      )}
-                    </div>
-                  </div>
-                  {ebinderStatus && (
-                    <div className={`lg:col-span-7 px-4 py-2.5 rounded-2xl text-xs flex items-center gap-2 -mt-2 ${
-                      ebinderStatus.type === 'loading' ? 'bg-blue-50 text-blue-700'
-                      : ebinderStatus.type === 'success' ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-red-50 text-red-700'
-                    }`}>
-                      {ebinderStatus.type === 'loading' && <i className="fa-solid fa-spinner animate-spin text-xs flex-shrink-0"></i>}
-                      {ebinderStatus.type === 'success' && <i className="fa-solid fa-circle-check text-xs flex-shrink-0"></i>}
-                      {ebinderStatus.type === 'error' && <i className="fa-solid fa-circle-xmark text-xs flex-shrink-0"></i>}
-                      <span className="font-medium">{ebinderStatus.message}</span>
-                      {ebinderStatus.type !== 'loading' && (
-                        <button onClick={(ev) => { ev.stopPropagation(); setEbinderStatus(null); }} className="ml-auto opacity-50 hover:opacity-100 text-base leading-none">✕</button>
-                      )}
-                    </div>
-                  )}
                   <div onClick={handleAutoAssign} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-blue-500 hover:shadow-lg transition-all">
                       <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-500"><i className="fa-solid fa-wand-magic-sparkles"></i></div>
                       <div><p className="text-[10px] font-black uppercase text-slate-400">Smart Fix</p><h4 className="font-bold">Auto-Assign</h4></div>
