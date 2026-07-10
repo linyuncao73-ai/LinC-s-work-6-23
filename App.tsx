@@ -420,6 +420,48 @@ const AvailabilityPanel: React.FC<{
   );
 };
 
+const PasteTableModal: React.FC<{
+  onClose: () => void;
+  onImport: (text: string) => void;
+  error: string;
+  busy: boolean;
+}> = ({ onClose, onImport, error, busy }) => {
+  const [text, setText] = useState('');
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
+      <div className="bg-white rounded-[32px] shadow-2xl border border-slate-100 w-full max-w-2xl relative flex flex-col max-h-[85vh]">
+        <div className="p-7 border-b border-slate-50 flex-shrink-0">
+          <h3 className="text-xl font-black text-slate-800">粘贴取货表</h3>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
+            在取货表网页上框选整个表格 → Ctrl+C 复制 → 粘贴到这里（不依赖 AI，瞬间导入）
+          </p>
+        </div>
+        <div className="p-7 flex-1 overflow-y-auto">
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder={"例如：\n33011  -  465  PENDING  8257  待转扫  1-253(33011-2-1),254-473(33011-2-2)  2\n33012  -  577  PENDING  8258  待转扫  1-181(33012-3-1),182-352(33012-3-2),353-580(33012-3-3)  3\n…"}
+            className="w-full h-64 px-5 py-4 border-2 border-slate-100 rounded-2xl text-xs font-mono focus:border-purple-400 focus:outline-none resize-none"
+            autoFocus
+          />
+          {error && <p className="text-xs text-red-600 font-bold mt-3">{error}</p>}
+        </div>
+        <div className="p-7 bg-slate-50 grid grid-cols-2 gap-4 flex-shrink-0">
+          <button onClick={onClose} className="px-6 py-4 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">Cancel</button>
+          <button
+            onClick={() => onImport(text)}
+            disabled={!text.trim() || busy}
+            className="px-6 py-4 rounded-2xl bg-purple-600 text-white font-black text-xs hover:bg-purple-700 transition-all shadow-lg disabled:opacity-40"
+          >
+            导入 →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const FeedbackModal: React.FC<{
   routes: RouteData[];
   registry: DriverRegistry;
@@ -1575,6 +1617,8 @@ const App: React.FC = () => {
   const [reassigningRoute, setReassigningRoute] = useState<RouteData | null>(null);
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showPasteTableModal, setShowPasteTableModal] = useState(false);
+  const [pasteTableError, setPasteTableError] = useState('');
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(() => !!getStoredApiKey());
   const [cloudStatus, setCloudStatus] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
@@ -1905,6 +1949,24 @@ const App: React.FC = () => {
       setView('main');
     } catch (err: any) { setCloudStatus({ type: 'error', message: `Excel 导入失败：${err.message || '未知错误'}` }); }
     finally { setLoading(false); e.target.value = ''; }
+  };
+
+  const handlePasteTableImport = async (text: string) => {
+    setPasteTableError('');
+    try {
+      const { parsePastedDispatchTable } = await import('./services/textTableParser');
+      const data = parsePastedDispatchTable(text, registry);
+      setRoutes(data.routes);
+      setBatchInfo(data.batchInfo);
+      setEbinderManualOverrides({});
+      setHasStarted(true);
+      setView('main');
+      setShowPasteTableModal(false);
+      const zones = new Set(data.routes.map(r => r.routeNum.split('-')[0])).size;
+      setCloudStatus({ type: 'success', message: `已导入取货表：${zones} 个大区 · ${data.routes.length} 条子路线 · 共 ${data.batchInfo.totalVolume} 件 · 手动请假标记已重置` });
+    } catch (err: any) {
+      setPasteTableError(err.message || '解析失败，请检查粘贴内容');
+    }
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2245,6 +2307,10 @@ const App: React.FC = () => {
             {!loading && (view !== 'main' || !showLanding) && (
               <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6 mb-6">
+                  <div onClick={() => { setPasteTableError(''); setShowPasteTableModal(true); }} className="bg-white p-6 rounded-3xl shadow-sm border border-purple-200 flex items-center gap-4 cursor-pointer hover:border-purple-500 hover:shadow-lg transition-all">
+                      <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-500"><i className="fa-solid fa-paste"></i></div>
+                      <div><p className="text-[10px] font-black uppercase text-slate-400">推荐 · 秒导入</p><h4 className="font-bold">粘贴取货表</h4></div>
+                  </div>
                   <div onClick={() => imageInputRef.current?.click()} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-purple-500 hover:shadow-lg transition-all">
                       <input type="file" ref={imageInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
                       <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-500"><i className="fa-solid fa-camera"></i></div>
@@ -2387,6 +2453,14 @@ const App: React.FC = () => {
           />
         )}
         {showApiKeyModal && <ApiKeyModal onClose={() => setShowApiKeyModal(false)} onSaved={setHasApiKey} />}
+        {showPasteTableModal && (
+          <PasteTableModal
+            onClose={() => setShowPasteTableModal(false)}
+            onImport={handlePasteTableImport}
+            error={pasteTableError}
+            busy={false}
+          />
+        )}
         {showFeedbackModal && (
           <FeedbackModal
             routes={routes}

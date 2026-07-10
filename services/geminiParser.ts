@@ -115,8 +115,6 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
 
   const rawResult = JSON.parse(response.text || "{}");
   const extractedRows = rawResult.rows || [];
-  const routes: RouteData[] = [];
-  let totalVolumeAccumulated = 0;
 
   // Use extracted date or today as fallback
   let displayDate = rawResult.date || '';
@@ -124,11 +122,7 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
     displayDate = getOttawaTodayDateString();
   }
 
-  extractedRows.forEach((item: any, idx: number) => {
-    const baseRoute = String(item.routeNum || '').trim();
-    if (!/^33\d{3}/.test(baseRoute)) return;
-
-    totalVolumeAccumulated += (item.totalVolume || 0);
+  const rows: DispatchRow[] = (extractedRows as any[]).map((item: any) => {
     // Prefer the structured segments from the model; fall back to regex-parsing
     // the raw cell text if they're missing or malformed.
     const structured = Array.isArray(item.segments)
@@ -136,14 +130,54 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
           .filter((s: any) => typeof s?.start === 'number' && typeof s?.end === 'number' && String(s?.subRoute || '').trim() !== '')
           .map((s: any) => ({ start: s.start, end: s.end, ident: String(s.subRoute).trim() }))
       : [];
-    const segments = structured.length > 0 ? structured : parseAllocationSegments(item.allocationString || '');
+    return {
+      routeNum: String(item.routeNum || '').trim(),
+      totalVolume: Number(item.totalVolume) || 0,
+      scanId: item.scanId ? String(item.scanId) : undefined,
+      timeSlot: item.timeSlot ? String(item.timeSlot) : undefined,
+      segments: structured.length > 0 ? structured : parseAllocationSegments(item.allocationString || ''),
+    };
+  });
 
-    // Fallback time slot based on baseRoute and dynamic date mechanism
-    const defaultTime = getDefaultTimeSlot(baseRoute, displayDate);
-    const finalTimeSlot = item.timeSlot || defaultTime;
+  return {
+    routes: buildRoutesFromRows(rows, registry, displayDate, 'IMG'),
+    batchInfo: {
+      date: displayDate,
+      batchId: rawResult.batchId || ('IMG-EXTRACT-' + Date.now()),
+      totalVolume: rows.filter(r => /^33\d{3}/.test(r.routeNum)).reduce((s, r) => s + r.totalVolume, 0),
+    },
+  };
+};
 
-    if (segments.length > 0) {
-      segments.forEach((seg, sIdx) => {
+// ---------------------------------------------------------------------------
+// Shared row → RouteData expansion, used by the image import above and the
+// paste-text import (textTableParser).
+// ---------------------------------------------------------------------------
+
+export interface DispatchRow {
+  routeNum: string;
+  totalVolume: number;
+  scanId?: string;
+  timeSlot?: string;
+  segments: { start: number; end: number; ident: string }[];
+}
+
+export function buildRoutesFromRows(
+  rows: DispatchRow[],
+  registry: DriverRegistry,
+  displayDate: string,
+  idPrefix: string
+): RouteData[] {
+  const routes: RouteData[] = [];
+
+  rows.forEach((item, idx) => {
+    const baseRoute = item.routeNum;
+    if (!/^33\d{3}/.test(baseRoute)) return;
+
+    const finalTimeSlot = item.timeSlot || getDefaultTimeSlot(baseRoute, displayDate);
+
+    if (item.segments.length > 0) {
+      item.segments.forEach((seg, sIdx) => {
         const volume = seg.end - seg.start + 1;
         let finalRouteNum = '';
         let location = 'Unknown';
@@ -168,7 +202,7 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
         }
 
         routes.push({
-          id: `IMG-${finalRouteNum}-${idx}-${sIdx}`,
+          id: `${idPrefix}-${finalRouteNum}-${idx}-${sIdx}`,
           driver: driverName,
           driverId: driverId,
           driverName: driverName,
@@ -182,7 +216,7 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
       });
     } else {
       routes.push({
-        id: `IMG-SINGLE-${baseRoute}-${idx}`,
+        id: `${idPrefix}-SINGLE-${baseRoute}-${idx}`,
         driver: 'Unassigned',
         driverId: '',
         driverName: 'Unassigned',
@@ -196,12 +230,5 @@ export const parseImageFile = async (file: File, registry: DriverRegistry): Prom
     }
   });
 
-  return {
-    routes,
-    batchInfo: {
-      date: displayDate,
-      batchId: rawResult.batchId || ('IMG-EXTRACT-' + Date.now()),
-      totalVolume: totalVolumeAccumulated
-    }
-  };
-};
+  return routes;
+}

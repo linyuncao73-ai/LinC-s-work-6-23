@@ -1,10 +1,11 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
-// Primary model first. Fallbacks favor vision accuracy: dense-table OCR gets
-// worse on lite models, so prefer 2.5-pro before dropping to 2.0-flash.
-const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+// Primary model first; then a wide ladder of rarely-overloaded fallbacks.
+// The lite tiers handle this app's structured extraction fine, and 2.5-pro
+// (busiest during demand spikes) goes last.
+const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-pro"];
 const ATTEMPTS_PER_MODEL = 2;
-const RETRY_DELAY_MS = 1500;
+const RETRY_DELAYS_MS = [1500, 3000];
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -53,7 +54,7 @@ export async function generateWithRetry(
         if (!isRetryable(err) && !notFound) throw err;
         lastErr = err;
         if (notFound) break;
-        if (attempt < ATTEMPTS_PER_MODEL) await sleep(RETRY_DELAY_MS);
+        if (attempt < ATTEMPTS_PER_MODEL) await sleep(RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]);
       }
     }
   }
