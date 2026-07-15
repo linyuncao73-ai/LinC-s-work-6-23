@@ -5,6 +5,7 @@ import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIA
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, saveArchive, listArchives, loadArchive, ArchiveEntry, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
+import { getHoldSuggestions } from './services/holdSuggestions';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
   const [value, setValue] = useState(getStoredApiKey());
@@ -1338,6 +1339,8 @@ const MainEditor: React.FC<{
 }> = ({ routes, registry, offDriverIds, onUpdate, onAddRow, onDeleteRow, onOpenSplit, onOpenReassign, onOpenFeedback }) => {
     const [teamFilter, setTeamFilter] = useState<string>('All');
     const sortedRoutes = useMemo(() => [...routes].sort((a, b) => compareRouteNums(a.routeNum, b.routeNum)), [routes]);
+    const holdSuggestions = useMemo(() => getHoldSuggestions(routes), [routes]);
+    const suggestedHoldIds = useMemo(() => new Set(holdSuggestions.flatMap(s => s.routeIds)), [holdSuggestions]);
 
     const teamCounts = useMemo(() => {
         const counts: Record<string, number> = {};
@@ -1368,6 +1371,24 @@ const MainEditor: React.FC<{
                   </button>
                 </div>
             </div>
+            {holdSuggestions.length > 0 && (
+              <div className="px-8 py-3 border-b border-amber-100 bg-amber-50/70 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-black text-amber-700 uppercase tracking-wider">
+                  <i className="fa-solid fa-hand mr-1"></i>Hold 建议
+                </span>
+                {holdSuggestions.map(s => (
+                  <button
+                    key={s.label}
+                    onClick={() => s.routeIds.forEach(id => onUpdate(id, { isHold: true }))}
+                    className="px-3 py-1.5 rounded-xl text-[11px] font-black bg-white text-amber-800 border border-amber-300 hover:bg-amber-100 transition-all shadow-sm"
+                    title={`点击将 ${s.routeNums.join(' + ')} 标记为 Hold`}
+                  >
+                    {s.label} · {s.volume} 件 ≤ {s.threshold} — 一键 Hold
+                  </button>
+                ))}
+                <span className="text-[10px] text-amber-600/80 font-bold">货量低于门槛的偏远线，点击即标 HOLD（可在行内取消）</span>
+              </div>
+            )}
             {routes.length > 0 && (
               <div className="px-8 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
                 <button
@@ -1424,6 +1445,9 @@ const MainEditor: React.FC<{
                                         <div className="flex items-center gap-2 flex-wrap">
                                             <input value={route.routeNum} onChange={e => onUpdate(route.id, { routeNum: e.target.value })} className={`w-32 bg-transparent border-b border-transparent focus:border-orange-400 focus:outline-none font-bold ${route.isHold ? 'text-red-600 line-through' : 'text-orange-600'}`} />
                                             {route.isHold && <span className="bg-red-100 text-red-800 text-[8px] font-black px-1.5 py-0.5 rounded border border-red-200 uppercase tracking-wider">HOLD</span>}
+                                            {!route.isHold && suggestedHoldIds.has(route.id) && (
+                                              <span className="bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider" title="货量低于 Hold 门槛，见表格上方建议条">可 Hold</span>
+                                            )}
                                             {isOff && (
                                               <>
                                                 <span className="bg-red-500 text-white text-[9px] font-black px-2 py-1 rounded-md border border-red-600 uppercase tracking-wider animate-pulse shadow-sm">Driver Off</span>
