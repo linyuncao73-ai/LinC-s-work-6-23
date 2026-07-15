@@ -1639,13 +1639,13 @@ const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo, groupLi
             <button
               onClick={copyAndOpenGroup}
               title="文案已复制，群聊打开后 Ctrl+V 发送"
-              className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${sent ? 'bg-emerald-600 text-white' : 'bg-white/20 hover:bg-white/30 text-white'}`}
+              className={`px-4 py-2 rounded-lg text-xs font-black transition-all shadow-md ${sent ? 'bg-emerald-800 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
             >
-              {sent ? '已复制 · 粘贴发送' : <><i className="fa-brands fa-whatsapp mr-1"></i>打开群聊</>}
+              {sent ? <><i className="fa-solid fa-check mr-1"></i>已复制 · 粘贴发送</> : <><i className="fa-brands fa-whatsapp mr-1"></i>打开群聊</>}
             </button>
           )}
-          <button onClick={copyToClipboard} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${copied ? 'bg-emerald-600 text-white' : 'bg-white/20 hover:bg-white/30 text-white'}`}>
-              {copied ? 'Copied!' : 'Copy'}
+          <button onClick={copyToClipboard} className={`px-4 py-2 rounded-lg text-xs font-black transition-all shadow-md ${copied ? 'bg-emerald-600 text-white' : 'bg-slate-900 hover:bg-slate-800 text-white'}`}>
+              {copied ? <><i className="fa-solid fa-check mr-1"></i>Copied!</> : <><i className="fa-regular fa-copy mr-1"></i>Copy</>}
           </button>
         </div>
       </div>
