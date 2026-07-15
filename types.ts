@@ -256,6 +256,10 @@ export function partitionRegistry(registry: DriverRegistry): { permanent: Driver
 
 export const ALLOWED_TIME_SLOTS = ['06:00 AM', '07:00 AM', '08:00 AM'];
 
+// Cutting fewer parcels than this to a broker is usually refused —
+// the split modal warns (but doesn't block) below this number.
+export const BROKER_MIN_CUT = 120;
+
 export const DRIVER_MAX_CAPACITIES: Record<string, number> = {
   '19492': 300,
   '4574':  300,

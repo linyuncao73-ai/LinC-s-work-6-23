@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { parseExcelFile } from './services/excelParser';
-import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, BROKER_MIN_CUT, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, saveArchive, listArchives, loadArchive, ArchiveEntry, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
@@ -87,9 +87,10 @@ const SplitModal: React.FC<{
   route: RouteData;
   teamDrivers: { id: string; name: string }[];
   agencyFirstDriverIds: Record<string, string>;
+  driverCap?: number;
   onClose: () => void;
   onConfirm: (firstVolume: number, secondDriverId: string | null) => void;
-}> = ({ route, teamDrivers, agencyFirstDriverIds, onClose, onConfirm }) => {
+}> = ({ route, teamDrivers, agencyFirstDriverIds, driverCap, onClose, onConfirm }) => {
   const isCapacitySplit = route.capacityStatus === 'split-recommended' && (route.capacityExcess ?? 0) > 0;
   // Broker routes split within the same team: one step, pick the driver ID directly.
   const isBrokerRoute = AGENCIES.includes(route.driverGroup || '');
@@ -103,6 +104,12 @@ const SplitModal: React.FC<{
   const [splitVal, setSplitVal] = useState<number>(smartDefault);
   const [step, setStep] = useState<'volume' | 'broker'>('volume');
   const [manualId, setManualId] = useState('');
+
+  // 实时数量提醒（不阻塞确认）：剪给中介低于 120 件中介多半不接；
+  // 司机部分超过他的上限也标红。
+  const part2Vol = route.orderVolume - splitVal;
+  const brokerTooSmall = !isBrokerRoute && part2Vol > 0 && part2Vol < BROKER_MIN_CUT;
+  const overCap = driverCap != null && splitVal > driverCap;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
@@ -143,15 +150,27 @@ const SplitModal: React.FC<{
                 />
               </div>
               <div className="grid grid-cols-2 gap-3 text-center">
-                <div className="bg-blue-50 p-3 rounded-xl">
-                  <p className="text-[9px] font-black text-blue-400 uppercase">Part 1 (Keeps)</p>
-                  <p className="text-xl font-black text-blue-700">{splitVal}</p>
+                <div className={`p-3 rounded-xl ${overCap ? 'bg-red-50 border-2 border-red-300' : 'bg-blue-50'}`}>
+                  <p className={`text-[9px] font-black uppercase ${overCap ? 'text-red-400' : 'text-blue-400'}`}>Part 1 (Keeps)</p>
+                  <p className={`text-xl font-black ${overCap ? 'text-red-600' : 'text-blue-700'}`}>{splitVal}</p>
                 </div>
-                <div className="bg-orange-50 p-3 rounded-xl">
-                  <p className="text-[9px] font-black text-orange-400 uppercase">Part 2 (Cut)</p>
-                  <p className="text-xl font-black text-orange-700">{route.orderVolume - splitVal}</p>
+                <div className={`p-3 rounded-xl ${brokerTooSmall ? 'bg-red-50 border-2 border-red-300' : 'bg-orange-50'}`}>
+                  <p className={`text-[9px] font-black uppercase ${brokerTooSmall ? 'text-red-400' : 'text-orange-400'}`}>Part 2 (Cut)</p>
+                  <p className={`text-xl font-black ${brokerTooSmall ? 'text-red-600' : 'text-orange-700'}`}>{part2Vol}</p>
                 </div>
               </div>
+              {overCap && (
+                <p className="text-xs font-bold text-red-600 -mt-3">
+                  <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                  超过{route.driverName ? ` ${route.driverName} 的` : '司机'}上限 {driverCap} 件
+                </p>
+              )}
+              {brokerTooSmall && (
+                <p className="text-xs font-bold text-red-600 -mt-3">
+                  <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                  给中介少于 {BROKER_MIN_CUT} 件，中介可能不接单
+                </p>
+              )}
               {isBrokerRoute && (
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-slate-400 uppercase">Part 2 driver · Team {route.driverGroup} — 点司机号直接完成拆分</p>
@@ -201,10 +220,16 @@ const SplitModal: React.FC<{
         ) : (
           <>
             <div className="p-8 space-y-4">
-              <div className="bg-orange-50 border border-orange-100 rounded-2xl px-5 py-3 flex justify-between text-sm">
-                <span className="text-blue-700 font-black">Part 1 (Driver): {splitVal}</span>
-                <span className="text-orange-700 font-black">Part 2 (Broker): {route.orderVolume - splitVal}</span>
+              <div className={`rounded-2xl px-5 py-3 flex justify-between text-sm border ${brokerTooSmall || overCap ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-100'}`}>
+                <span className={`font-black ${overCap ? 'text-red-600' : 'text-blue-700'}`}>Part 1 (Driver): {splitVal}</span>
+                <span className={`font-black ${brokerTooSmall ? 'text-red-600' : 'text-orange-700'}`}>Part 2 (Broker): {part2Vol}</span>
               </div>
+              {brokerTooSmall && (
+                <p className="text-xs font-bold text-red-600">
+                  <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                  给中介少于 {BROKER_MIN_CUT} 件，中介可能不接单 —— 可返回上一步调大 Part 2
+                </p>
+              )}
               <p className="text-[10px] font-black text-slate-400 uppercase">Select broker for Part 2</p>
               <div className="grid grid-cols-3 gap-3">
                 {AGENCIES.map(agency => (
@@ -1246,6 +1271,7 @@ const PrintView: React.FC<{ routes: RouteData[], batchInfo: BatchInfo }> = ({ ro
 const AllocationSummaryView: React.FC<{ routes: RouteData[] }> = ({ routes }) => {
   const [copiedAll, setCopiedAll] = useState(false);
   const [copiedGroup, setCopiedGroup] = useState<string | null>(null);
+  const [doneBases, setDoneBases] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => {
     const map: Record<string, RouteData[]> = {};
@@ -1254,7 +1280,7 @@ const AllocationSummaryView: React.FC<{ routes: RouteData[] }> = ({ routes }) =>
       if (!map[base]) map[base] = [];
       map[base].push(r);
     });
-    
+
     return Object.entries(map).map(([base, list]) => {
       const sorted = [...list].sort((a, b) => compareRouteNums(a.routeNum, b.routeNum));
       let currentStart = 1;
@@ -1269,6 +1295,10 @@ const AllocationSummaryView: React.FC<{ routes: RouteData[] }> = ({ routes }) =>
     }).sort((a, b) => a.base.localeCompare(b.base));
   }, [routes]);
 
+  // 顺序复制模式：下一条 = 第一个还没复制过的区
+  const nextGroup = groups.find(g => !doneBases.has(g.base)) || null;
+  const doneCount = groups.filter(g => doneBases.has(g.base)).length;
+
   const copyAll = () => {
     const text = groups.map(g => g.allocString).join('\n');
     navigator.clipboard.writeText(text);
@@ -1279,48 +1309,91 @@ const AllocationSummaryView: React.FC<{ routes: RouteData[] }> = ({ routes }) =>
   const copyGroup = (base: string, allocString: string) => {
     navigator.clipboard.writeText(allocString);
     setCopiedGroup(base);
+    setDoneBases(prev => new Set([...prev, base]));
     setTimeout(() => setCopiedGroup(null), 2000);
+  };
+
+  const copyNext = () => {
+    if (nextGroup) copyGroup(nextGroup.base, nextGroup.allocString);
   };
 
   return (
     <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-8">
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex justify-between items-center mb-8 gap-4 flex-wrap">
         <div>
           <h3 className="text-xl font-black text-slate-800">Excel Allocation Ranges</h3>
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Copy and paste into E5 or Allocation columns</p>
         </div>
-        <button 
-          onClick={copyAll}
-          disabled={routes.length === 0}
-          className={`w-52 py-4 rounded-2xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${routes.length === 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' : (copiedAll ? 'bg-emerald-500 text-white shadow-emerald-100' : 'bg-slate-900 text-white shadow-slate-200 hover:bg-slate-800')}`}
-        >
-          {copiedAll ? <><i className="fa-solid fa-check"></i> All Copied!</> : <><i className="fa-solid fa-copy"></i> Copy All Ranges</>}
-        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          {groups.length > 0 && (
+            nextGroup ? (
+              <button
+                onClick={copyNext}
+                title={`复制 ${nextGroup.base}，然后切到公司网页 Ctrl+V；再回来点这里复制下一条`}
+                className="px-8 py-4 rounded-2xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 bg-orange-600 text-white shadow-orange-100 hover:bg-orange-700"
+              >
+                <i className="fa-solid fa-forward"></i>
+                复制下一条 · {nextGroup.base}（{doneCount}/{groups.length}）
+              </button>
+            ) : (
+              <>
+                <span className="px-6 py-4 rounded-2xl text-sm font-black bg-emerald-500 text-white shadow-lg shadow-emerald-100 flex items-center gap-2">
+                  <i className="fa-solid fa-check"></i>全部复制完成 {groups.length}/{groups.length}
+                </span>
+                <button
+                  onClick={() => setDoneBases(new Set())}
+                  className="px-4 py-4 rounded-2xl text-xs font-black text-slate-400 hover:text-slate-600 border border-slate-200 hover:border-slate-400 transition-all"
+                >
+                  重新开始
+                </button>
+              </>
+            )
+          )}
+          <button
+            onClick={copyAll}
+            disabled={routes.length === 0}
+            className={`px-6 py-4 rounded-2xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${routes.length === 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' : (copiedAll ? 'bg-emerald-500 text-white shadow-emerald-100' : 'bg-slate-900 text-white shadow-slate-200 hover:bg-slate-800')}`}
+          >
+            {copiedAll ? <><i className="fa-solid fa-check"></i> All Copied!</> : <><i className="fa-solid fa-copy"></i> Copy All</>}
+          </button>
+        </div>
       </div>
       <div className="space-y-4">
-        {groups.map((g, i) => (
-          <div key={i} className="flex items-center gap-4">
-            <div className="flex-grow bg-slate-50 border border-slate-100 px-6 py-4 rounded-2xl font-mono text-[11px] text-slate-600 break-all leading-relaxed">
-                {g.allocString}
+        {groups.map((g, i) => {
+          const isDone = doneBases.has(g.base);
+          const isNext = nextGroup?.base === g.base;
+          return (
+            <div key={i} className={`flex items-center gap-4 transition-all ${isDone ? 'opacity-50' : ''}`}>
+              <div className={`flex-grow px-6 py-4 rounded-2xl font-mono text-[11px] break-all leading-relaxed border-2 transition-all ${
+                isDone ? 'bg-emerald-50/50 border-emerald-200 text-slate-400'
+                : isNext ? 'bg-orange-50/60 border-orange-400 text-slate-700 shadow-md'
+                : 'bg-slate-50 border-slate-100 text-slate-600'
+              }`}>
+                  {g.allocString}
+              </div>
+              <button
+                onClick={() => copyGroup(g.base, g.allocString)}
+                className={`w-52 py-4 rounded-2xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${
+                  copiedGroup === g.base ? 'bg-emerald-500 text-white shadow-emerald-100 font-extrabold'
+                  : isDone ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 shadow-none hover:bg-emerald-200'
+                  : 'bg-slate-900 text-white shadow-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                {copiedGroup === g.base ? (
+                  <>
+                    <i className="fa-solid fa-check"></i>
+                    {g.base} Copied!
+                  </>
+                ) : (
+                  <>
+                    <i className={`fa-solid ${isDone ? 'fa-check' : 'fa-copy'} text-xs`}></i>
+                    {g.base}
+                  </>
+                )}
+              </button>
             </div>
-            <button 
-              onClick={() => copyGroup(g.base, g.allocString)}
-              className={`w-52 py-4 rounded-2xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${copiedGroup === g.base ? 'bg-emerald-500 text-white shadow-emerald-100 font-extrabold' : 'bg-slate-900 text-white shadow-slate-200 hover:bg-slate-800'}`}
-            >
-              {copiedGroup === g.base ? (
-                <>
-                  <i className="fa-solid fa-check"></i>
-                  {g.base} Copied!
-                </>
-              ) : (
-                <>
-                  <i className="fa-solid fa-copy text-xs"></i>
-                  {g.base}
-                </>
-              )}
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -2585,6 +2658,7 @@ const App: React.FC = () => {
               .filter(([, d]) => d.group === splittingRoute.driverGroup)
               .map(([id, d]) => ({ id, name: d.name }))}
             agencyFirstDriverIds={agencyFirstDriverIds}
+            driverCap={splittingRoute.driverId ? registry[splittingRoute.driverId]?.maxCapacity : undefined}
             onClose={() => setSplittingRoute(null)}
             onConfirm={handleSplit}
           />
