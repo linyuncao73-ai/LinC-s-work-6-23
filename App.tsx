@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { parseExcelFile } from './services/excelParser';
 import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
-import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
+import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, saveArchive, listArchives, loadArchive, ArchiveEntry, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
 
 const ApiKeyModal: React.FC<{ onClose: () => void; onSaved: (hasKey: boolean) => void }> = ({ onClose, onSaved }) => {
@@ -420,6 +420,49 @@ const AvailabilityPanel: React.FC<{
   );
 };
 
+const HistoryModal: React.FC<{
+  onClose: () => void;
+  onRestore: (entry: ArchiveEntry) => void;
+}> = ({ onClose, onRestore }) => {
+  const [entries, setEntries] = useState<ArchiveEntry[] | null>(null);
+  useEffect(() => {
+    listArchives().then(setEntries).catch(() => setEntries([]));
+  }, []);
+  const fmtTime = (iso: string) => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
+    } catch { return ''; }
+  };
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
+      <div className="bg-white rounded-[32px] shadow-2xl border border-slate-100 w-full max-w-md relative flex flex-col max-h-[80vh]">
+        <div className="p-7 border-b border-slate-50 flex-shrink-0">
+          <h3 className="text-xl font-black text-slate-800">历史存档</h3>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">每次 ☁ 保存都会按排班日期自动存档一份</p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-2">
+          {entries === null && <p className="text-xs text-slate-400 text-center py-8"><i className="fa-solid fa-spinner animate-spin mr-2"></i>加载中…</p>}
+          {entries !== null && entries.length === 0 && <p className="text-xs text-slate-400 text-center py-8">还没有存档。点 ☁↑ 保存一次即产生当天的存档。</p>}
+          {entries?.map(entry => (
+            <button
+              key={entry.id}
+              onClick={() => onRestore(entry)}
+              className="w-full flex justify-between items-center px-5 py-3.5 rounded-2xl border border-slate-100 hover:border-orange-300 hover:bg-orange-50/40 transition-all text-left"
+            >
+              <span className="font-black text-slate-800 text-sm">{entry.dateLabel}</span>
+              <span className="text-[10px] text-slate-400">保存于 {fmtTime(entry.updatedAt)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="p-5 bg-slate-50 flex-shrink-0">
+          <button onClick={onClose} className="w-full py-3 rounded-2xl font-black text-xs text-slate-400 hover:text-slate-600 transition-all">关闭</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const PasteTableModal: React.FC<{
   onClose: () => void;
   onImport: (text: string) => void;
@@ -637,7 +680,9 @@ const DriversView: React.FC<{
   onApproveTemp: (id: string) => void;
   onApproveAllTemp: () => void;
   onDeleteTemp: (id: string) => void;
-}> = ({ registry, dirty, onUpsert, onDelete, onPush, onApproveTemp, onApproveAllTemp, onDeleteTemp }) => {
+  teamContacts: Record<string, string>;
+  onSetContact: (team: string, link: string) => void;
+}> = ({ registry, dirty, onUpsert, onDelete, onPush, onApproveTemp, onApproveAllTemp, onDeleteTemp, teamContacts, onSetContact }) => {
   const [search, setSearch] = useState('');
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
@@ -749,6 +794,23 @@ const DriversView: React.FC<{
           </div>
         </div>
       )}
+      <div className="px-8 py-4 bg-emerald-50/40 border-b border-slate-100">
+        <p className="text-[10px] font-black text-slate-500 uppercase mb-1">中介 WhatsApp 群组链接</p>
+        <p className="text-[10px] text-slate-400 mb-3">在各中介群里点"群资料 → 邀请链接"复制后粘贴到这里；填好后 Reports 页可一键"复制并打开群聊"。记得点 Update 上传共享给同事。</p>
+        <div className="flex flex-wrap gap-3">
+          {AGENCIES.map(team => (
+            <div key={team}>
+              <p className={`text-[9px] font-black px-1.5 py-0.5 rounded border inline-block mb-1 ${getAgencyColor(team)}`}>{team}</p>
+              <input
+                value={teamContacts[team] || ''}
+                onChange={e => onSetContact(team, e.target.value)}
+                placeholder="https://chat.whatsapp.com/…"
+                className="block w-56 px-3 py-2 border-2 border-slate-100 rounded-xl text-[10px] font-mono focus:border-emerald-400 focus:outline-none bg-white"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="px-8 py-4 bg-orange-50/40 border-b border-slate-100 flex flex-wrap items-end gap-3">
         <div>
           <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Driver ID</p>
@@ -1445,7 +1507,7 @@ const MainEditor: React.FC<{
     );
 };
 
-const WhatsAppReports: React.FC<{ groups: AgencyGroup[], batchInfo: BatchInfo }> = ({ groups, batchInfo }) => {
+const WhatsAppReports: React.FC<{ groups: AgencyGroup[], batchInfo: BatchInfo, teamContacts: Record<string, string> }> = ({ groups, batchInfo, teamContacts }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
       {groups.length === 0 ? (
@@ -1453,14 +1515,22 @@ const WhatsAppReports: React.FC<{ groups: AgencyGroup[], batchInfo: BatchInfo }>
           <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No assigned routes to generate reports</p>
         </div>
       ) : (
-        groups.map(group => <AgencyReport key={group.name} group={group} batchInfo={batchInfo} />)
+        groups.map(group => (
+          <AgencyReport
+            key={group.name}
+            group={group}
+            batchInfo={batchInfo}
+            groupLink={teamContacts[group.name.replace('Team ', '')] || ''}
+          />
+        ))
       )}
     </div>
   );
 };
 
-const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo }> = ({ group, batchInfo }) => {
+const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo, groupLink?: string }> = ({ group, batchInfo, groupLink }) => {
   const [copied, setCopied] = useState(false);
+  const [sent, setSent] = useState(false);
   
   const generateWhatsAppMessage = () => {
     const isCompany = group.name === 'Company Drivers';
@@ -1529,13 +1599,31 @@ const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo }> = ({ 
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const copyAndOpenGroup = async () => {
+    try { await navigator.clipboard.writeText(generateWhatsAppMessage()); } catch { /* still open the group */ }
+    setSent(true);
+    setTimeout(() => setSent(false), 4000);
+    window.open(groupLink, '_blank', 'noopener');
+  };
+
   return (
     <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full">
-      <div className={`px-8 py-4 flex justify-between items-center ${getAgencyColor(group.name.replace('Team ', '').replace(' Drivers', ''))}`}>
+      <div className={`px-8 py-4 flex justify-between items-center gap-2 ${getAgencyColor(group.name.replace('Team ', '').replace(' Drivers', ''))}`}>
         <h3 className="font-black text-sm uppercase tracking-wider">{group.name}</h3>
-        <button onClick={copyToClipboard} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${copied ? 'bg-emerald-600 text-white' : 'bg-white/20 hover:bg-white/30 text-white'}`}>
-            {copied ? 'Copied!' : 'Copy'}
-        </button>
+        <div className="flex items-center gap-2">
+          {groupLink && (
+            <button
+              onClick={copyAndOpenGroup}
+              title="文案已复制，群聊打开后 Ctrl+V 发送"
+              className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${sent ? 'bg-emerald-600 text-white' : 'bg-white/20 hover:bg-white/30 text-white'}`}
+            >
+              {sent ? '已复制 · 粘贴发送' : <><i className="fa-brands fa-whatsapp mr-1"></i>打开群聊</>}
+            </button>
+          )}
+          <button onClick={copyToClipboard} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${copied ? 'bg-emerald-600 text-white' : 'bg-white/20 hover:bg-white/30 text-white'}`}>
+              {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
       </div>
       <div className="p-4 bg-slate-50 flex-grow">
         <div className="text-[11px] whitespace-pre-wrap font-sans text-slate-700 leading-tight">
@@ -1565,6 +1653,11 @@ const App: React.FC = () => {
   });
   // True while this browser has roster edits not yet pushed to Supabase
   const [rosterDirty, setRosterDirty] = useState(() => localStorage.getItem('yow_roster_dirty') === '1');
+  // Broker team → WhatsApp group invite link
+  const [teamContacts, setTeamContacts] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('yow_team_contacts') || '{}'); } catch { return {}; }
+  });
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
     const saved = localStorage.getItem('yow_dispatch_registry');
     let tombstones: string[] = [];
@@ -1653,6 +1746,7 @@ const App: React.FC = () => {
   useEffect(() => { if (ebinderData) localStorage.setItem('yow_dispatch_ebinder', JSON.stringify(ebinderData)); }, [ebinderData]);
   useEffect(() => { localStorage.setItem('yow_dispatch_overrides', JSON.stringify(ebinderManualOverrides)); }, [ebinderManualOverrides]);
   useEffect(() => { localStorage.setItem('yow_dispatch_deleted', JSON.stringify(deletedDriverIds)); }, [deletedDriverIds]);
+  useEffect(() => { localStorage.setItem('yow_team_contacts', JSON.stringify(teamContacts)); }, [teamContacts]);
   useEffect(() => {
     if (ebinderStatus?.type !== 'success') return;
     const t = setTimeout(() => setEbinderStatus(null), 5000);
@@ -1709,7 +1803,10 @@ const App: React.FC = () => {
       if (!rosterDirty) {
         try {
           const result = await loadRoster();
-          if (result) applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
+          if (result) {
+            applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
+            if (result.data.teamContacts) setTeamContacts(result.data.teamContacts);
+          }
         } catch { /* offline or unconfigured — keep local roster */ }
       }
       try {
@@ -1770,6 +1867,25 @@ const App: React.FC = () => {
     setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
   };
 
+  const handleSetTeamContact = (team: string, link: string) => {
+    setTeamContacts(prev => ({ ...prev, [team]: link.trim() }));
+    markRosterDirty(true);
+  };
+
+  const handleRestoreArchive = async (entry: ArchiveEntry) => {
+    if (!window.confirm(`用 ${entry.dateLabel} 的存档覆盖当前表格？\n（只恢复到本机，不影响云端最新数据；确认后想固化再点 ☁↑）`)) return;
+    setCloudStatus({ type: 'loading', message: `正在恢复 ${entry.dateLabel} 的存档…` });
+    try {
+      const snap = await loadArchive(entry.id);
+      if (!snap) { setCloudStatus({ type: 'error', message: '该存档不存在或已损坏' }); return; }
+      applySnapshot(snap);
+      setShowHistoryModal(false);
+      setCloudStatus({ type: 'success', message: `已恢复 ${entry.dateLabel} 的排班表` });
+    } catch (err: any) {
+      setCloudStatus({ type: 'error', message: err.message || '恢复失败，请重试' });
+    }
+  };
+
   const handleRosterPush = async () => {
     const pw = window.prompt('输入修改密码后上传名册到 Supabase：');
     if (pw === null) return;
@@ -1780,7 +1896,7 @@ const App: React.FC = () => {
     setCloudStatus({ type: 'loading', message: '正在上传名册到 Supabase…' });
     try {
       const { permanent } = partitionRegistry(registry);
-      await saveRoster({ registry: permanent, deletedDriverIds, savedAt: new Date().toISOString() });
+      await saveRoster({ registry: permanent, deletedDriverIds, teamContacts, savedAt: new Date().toISOString() });
       markRosterDirty(false);
       setCloudStatus({ type: 'success', message: `名册已更新到 Supabase（${Object.keys(permanent).length} 名司机）。其他电脑打开网页会自动拉取。` });
     } catch (err: any) {
@@ -1848,9 +1964,16 @@ const App: React.FC = () => {
         if (!ok) { setCloudStatus(null); return; }
       }
       const savedAt = new Date().toISOString();
-      await saveSnapshot(buildSnapshot());
+      const snap = buildSnapshot();
+      await saveSnapshot(snap);
       markCloudSeen(cloudUpdatedAt && cloudUpdatedAt > savedAt ? cloudUpdatedAt : savedAt);
-      setCloudStatus({ type: 'success', message: `已保存到云端 · ${formatSavedTime(savedAt)}` });
+      let archiveNote = '';
+      try {
+        await saveArchive(snap, batchInfo.date);
+      } catch {
+        archiveNote = '（当日历史存档失败，下次保存会重试）';
+      }
+      setCloudStatus({ type: 'success', message: `已保存到云端 · ${formatSavedTime(savedAt)}${archiveNote}` });
     } catch (err: any) {
       setCloudStatus({ type: 'error', message: err.message || '保存失败，请重试' });
     }
@@ -2277,6 +2400,13 @@ const App: React.FC = () => {
                 <i className="fa-solid fa-cloud-arrow-down text-sm"></i>
               </button>
               <button
+                onClick={() => setShowHistoryModal(true)}
+                title="历史存档：翻看/恢复往日排班"
+                className="w-10 h-10 rounded-xl flex items-center justify-center bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all"
+              >
+                <i className="fa-solid fa-clock-rotate-left text-sm"></i>
+              </button>
+              <button
                 onClick={() => setShowApiKeyModal(true)}
                 title={hasApiKey ? 'API Key 已设置' : '设置 Gemini API Key'}
                 className={`relative w-10 h-10 rounded-xl flex items-center justify-center transition-all ${hasApiKey ? 'bg-slate-100 text-slate-400 hover:text-slate-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
@@ -2391,7 +2521,7 @@ const App: React.FC = () => {
                     {view === 'bookmarks' ? (
                       <BookmarksView />
                     ) : view === 'drivers' ? (
-                      <DriversView registry={registry} dirty={rosterDirty} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} onPush={handleRosterPush} onApproveTemp={handleApproveTemp} onApproveAllTemp={handleApproveAllTemp} onDeleteTemp={handleDeleteTemp} />
+                      <DriversView registry={registry} dirty={rosterDirty} onUpsert={handleUpsertDriver} onDelete={handleDeleteDriver} onPush={handleRosterPush} onApproveTemp={handleApproveTemp} onApproveAllTemp={handleApproveAllTemp} onDeleteTemp={handleDeleteTemp} teamContacts={teamContacts} onSetContact={handleSetTeamContact} />
                     ) : showLanding ? (
                       /* Show the full landing page if on a data-driven view with no data */
                       <div className="py-20 text-center max-w-2xl mx-auto">
@@ -2416,7 +2546,7 @@ const App: React.FC = () => {
                       /* Regular Views with Data */
                       <>
                         {view === 'main' && <MainEditor routes={routes} registry={registry} offDriverIds={offDriverIdsFinal} onUpdate={onUpdateRoute} onDeleteRow={onDeleteRoute} onAddRow={addEmptyRow} onOpenSplit={setSplittingRoute} onOpenReassign={setReassigningRoute} onOpenFeedback={() => setShowFeedbackModal(true)} />}
-                        {view === 'reports' && <WhatsAppReports groups={groupedData} batchInfo={batchInfo} />}
+                        {view === 'reports' && <WhatsAppReports groups={groupedData} batchInfo={batchInfo} teamContacts={teamContacts} />}
                         {view === 'allocations' && <AllocationSummaryView routes={routes} />}
                         {view === 'print' && <PrintView routes={routes} batchInfo={batchInfo} />}
                       </>
@@ -2453,6 +2583,7 @@ const App: React.FC = () => {
           />
         )}
         {showApiKeyModal && <ApiKeyModal onClose={() => setShowApiKeyModal(false)} onSaved={setHasApiKey} />}
+        {showHistoryModal && <HistoryModal onClose={() => setShowHistoryModal(false)} onRestore={handleRestoreArchive} />}
         {showPasteTableModal && (
           <PasteTableModal
             onClose={() => setShowPasteTableModal(false)}

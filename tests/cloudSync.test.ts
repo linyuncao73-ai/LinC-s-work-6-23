@@ -14,7 +14,9 @@ describe('snapshotCrypto', () => {
     const snap = { routes: [{ id: 'r1' }], savedAt: '2026-07-06' };
     const enc = await encryptJson(snap, 'yow2026');
     expect(isEncryptedPayload(enc)).toBe(true);
-    expect(JSON.stringify(enc)).not.toContain('r1'); // actually encrypted
+    // Search with the JSON quotes included — base64 ciphertext can randomly
+    // contain a bare "r1", but never a double-quote character.
+    expect(JSON.stringify(enc)).not.toContain('"r1"');
     const dec = await decryptJson(enc, 'yow2026');
     expect(dec).toEqual(snap);
   });
@@ -81,12 +83,54 @@ describe('cloudSync', () => {
       return { ok: true, json: async () => [{ data: savedBody.data, updated_at: savedBody.updated_at }] };
     });
 
-    await saveRoster({ registry: { '19492': { name: 'Fath', group: 'Company' } }, deletedDriverIds: ['2218'], savedAt: 'x' });
+    await saveRoster({
+      registry: { '19492': { name: 'Fath', group: 'Company' } },
+      deletedDriverIds: ['2218'],
+      teamContacts: { Alain: 'https://chat.whatsapp.com/abc123' },
+      savedAt: 'x',
+    });
     expect(savedBody.id).toBe('yow-roster');
 
     const loaded = await loadRoster();
     expect(loaded?.data.registry['19492'].name).toBe('Fath');
     expect(loaded?.data.deletedDriverIds).toEqual(['2218']);
+    expect(loaded?.data.teamContacts?.Alain).toBe('https://chat.whatsapp.com/abc123');
+  });
+
+  it('archives one row per dispatch date and lists them back', async () => {
+    const { archiveIdFromBatchDate, saveArchive, listArchives, loadArchive } = await import('../services/cloudSync');
+
+    expect(archiveIdFromBatchDate('07/10/2026')).toBe('yow-day-2026-07-10');
+    expect(archiveIdFromBatchDate('7/9/2026')).toBe('yow-day-2026-07-09');
+    expect(archiveIdFromBatchDate('garbage')).toBeNull();
+
+    let savedBody: any = null;
+    (globalThis as any).fetch = vi.fn(async (url: string, opts?: any) => {
+      if (opts?.method === 'POST') {
+        savedBody = JSON.parse(opts.body);
+        return { ok: true, text: async () => '' };
+      }
+      if (url.includes('id=like.yow-day-')) {
+        return { ok: true, json: async () => [{ id: 'yow-day-2026-07-10', updated_at: '2026-07-10T01:00:00Z' }] };
+      }
+      return { ok: true, json: async () => [{ data: savedBody.data, updated_at: savedBody.updated_at }] };
+    });
+
+    const snap: any = { routes: [1], batchInfo: {}, registry: {}, ebinderData: null, ebinderManualOverrides: {}, savedAt: 'x' };
+    await saveArchive(snap, '07/10/2026');
+    expect(savedBody.id).toBe('yow-day-2026-07-10');
+
+    const entries = await listArchives();
+    expect(entries).toEqual([{ id: 'yow-day-2026-07-10', dateLabel: '2026-07-10', updatedAt: '2026-07-10T01:00:00Z' }]);
+
+    const restored = await loadArchive('yow-day-2026-07-10');
+    expect((restored as any).routes).toEqual([1]);
+  });
+
+  it('listArchives returns [] when the request fails', async () => {
+    const { listArchives } = await import('../services/cloudSync');
+    (globalThis as any).fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    expect(await listArchives()).toEqual([]);
   });
 
   it('round-trips the pending (temp) drivers row separately from the roster', async () => {

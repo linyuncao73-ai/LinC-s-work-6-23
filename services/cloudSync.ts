@@ -77,10 +77,10 @@ export async function fetchCloudUpdatedAt(): Promise<string | null> {
   return Array.isArray(rows) && rows.length > 0 ? rows[0].updated_at : null;
 }
 
-export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedAt: string } | null> {
+async function loadRowById(id: string): Promise<{ data: any; updatedAt: string } | null> {
   const { url, key } = getConfig();
   const res = await fetch(
-    `${url}/rest/v1/dispatch_snapshots?id=eq.${SNAPSHOT_ID}&select=data,updated_at`,
+    `${url}/rest/v1/dispatch_snapshots?id=eq.${id}&select=data,updated_at`,
     { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
   );
   if (!res.ok) {
@@ -98,6 +98,65 @@ export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedA
   return { data, updatedAt: rows[0].updated_at };
 }
 
+export async function loadSnapshot(): Promise<{ data: DispatchSnapshot; updatedAt: string } | null> {
+  return loadRowById(SNAPSHOT_ID);
+}
+
+// ---- Daily archives: one row per dispatch date so past schedules stay
+// ---- recoverable for audits and rollbacks.
+
+/** "07/10/2026" → "yow-day-2026-07-10" (sortable, one row per dispatch day) */
+export function archiveIdFromBatchDate(batchDate: string): string | null {
+  const parts = String(batchDate).split('/').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  const [m, d, y] = parts;
+  return `yow-day-${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+export async function saveArchive(data: DispatchSnapshot, batchDate: string): Promise<void> {
+  const id = archiveIdFromBatchDate(batchDate);
+  if (!id) return;
+  const { url, key } = getConfig();
+  const passcode = getTeamPasscode();
+  const body = passcode ? await encryptJson(data, passcode) : data;
+  const res = await fetch(`${url}/rest/v1/dispatch_snapshots`, {
+    method: 'POST',
+    headers: {
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ id, data: body, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) throw new Error(`历史存档失败（HTTP ${res.status}）`);
+}
+
+export interface ArchiveEntry { id: string; dateLabel: string; updatedAt: string }
+
+export async function listArchives(): Promise<ArchiveEntry[]> {
+  const { url, key } = getConfig();
+  const res = await fetch(
+    `${url}/rest/v1/dispatch_snapshots?id=like.yow-day-*&select=id,updated_at&order=id.desc&limit=60`,
+    { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
+  ).catch(() => null);
+  if (!res || !res.ok) return [];
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r: any) => typeof r.id === 'string' && r.id.startsWith('yow-day-'))
+    .map((r: any) => ({
+      id: r.id,
+      dateLabel: r.id.slice('yow-day-'.length), // YYYY-MM-DD
+      updatedAt: r.updated_at || '',
+    }));
+}
+
+export async function loadArchive(id: string): Promise<DispatchSnapshot | null> {
+  const row = await loadRowById(id);
+  return row ? (row.data as DispatchSnapshot) : null;
+}
+
 // ---- Roster row: the driver registry has its own cloud row so it syncs
 // ---- independently of the daily dispatch snapshot.
 
@@ -106,6 +165,8 @@ const ROSTER_ID = 'yow-roster';
 export interface RosterPayload {
   registry: DriverRegistry;
   deletedDriverIds: string[];
+  /** Broker team → WhatsApp group invite link */
+  teamContacts?: Record<string, string>;
   savedAt: string;
 }
 
