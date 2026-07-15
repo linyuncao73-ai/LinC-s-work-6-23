@@ -26,7 +26,7 @@ export const AGENCIES = ['Alain', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
 
 // Drivers who left the company: purged from saved registries and hidden
 // from the availability panel even if old browser data still contains them.
-export const REMOVED_DRIVER_IDS = ['2218', '26133'];
+export const REMOVED_DRIVER_IDS = ['2218', '26133', '6087'];
 
 export interface BatchInfo {
   date: string;
@@ -288,7 +288,6 @@ function buildInitialRegistry(): DriverRegistry {
     '5528': { name: 'Ben', group: 'Company' },
     '6725': { name: 'Nabil', group: 'Company' },
     '13952': { name: 'Hamal', group: 'Company' },
-    '6087': { name: 'Jama', group: 'Company' },
     '13951': { name: 'Wesam', group: 'Company' },
     '5267': { name: 'Julio', group: 'Company' },
     '2566': { name: 'Chong', group: 'Company' },
@@ -364,6 +363,7 @@ function buildInitialRegistry(): DriverRegistry {
   '20060': { name: 'Kaneza Team', group: 'Kaneza' },
   // Parfait
   '5002471': { name: 'Parfait Team', group: 'Parfait' },
+  '27852': { name: 'Parfait Team', group: 'Parfait' },
   '27881': { name: 'Parfait Team', group: 'Parfait' },
   '29155': { name: 'Parfait Team', group: 'Parfait' },
   '28704': { name: 'Parfait Team', group: 'Parfait' },
@@ -465,7 +465,7 @@ export const PLACEHOLDER_MAPPING: Record<string, string> = {
   '33026-3-1': '2778', '33026-3-2': '18843', '33026-3-3': '16864',
   '33029-3-1': '18944', '33029-3-2': '19015', '33029-3-3': '19995',
   '33030-3-1': '6752', '33030-3-2': '5847', '33030-3-3': '28704',
-  '33030-4-1': '6752', '33030-4-2': '5847', '33030-4-3': '18944',
+  '33030-4-1': '6752', '33030-4-2': '5847', '33030-4-3': '18944', '33030-4-4': '27852',
   '33034-3-1': '3978', '33034-3-2': '4030', '33034-3-3': '13955',
   '33045-3-1': '4186', '33045-3-2': '2633', '33045-3-3': '3974',
   '33050-3-1': '19015', '33050-3-2': '30913', '33050-3-3': '15171',
