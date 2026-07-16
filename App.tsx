@@ -517,7 +517,7 @@ const PasteTableModal: React.FC<{
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
       <div className="bg-white rounded-[32px] shadow-2xl border border-slate-100 w-full max-w-2xl relative flex flex-col max-h-[85vh]">
         <div className="p-7 border-b border-slate-50 flex-shrink-0">
-          <h3 className="text-xl font-black text-slate-800">粘贴取货表</h3>
+          <h3 className="text-xl font-black text-slate-800">Paste Dispatch Table</h3>
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
             在取货表网页上框选整个表格 → Ctrl+C 复制 → 粘贴到这里（不依赖 AI，瞬间导入）
           </p>
@@ -610,7 +610,7 @@ const FeedbackModal: React.FC<{
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
       <div className="bg-white rounded-[32px] shadow-2xl border border-slate-100 w-full max-w-2xl relative flex flex-col max-h-[85vh]">
         <div className="p-7 border-b border-slate-50 flex-shrink-0">
-          <h3 className="text-xl font-black text-slate-800">粘贴中介反馈</h3>
+          <h3 className="text-xl font-black text-slate-800">Paste Broker Feedback</h3>
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
             {phase === 'preview' ? '确认改动后一键套用' : '把中介回复的文字整段粘进来，AI 自动解析成改动清单'}
           </p>
@@ -1453,7 +1453,7 @@ const MainEditor: React.FC<{
                 </div>
                 <div className="flex items-center gap-3">
                   <button onClick={onOpenFeedback} className="bg-emerald-600 text-white px-6 py-2 rounded-xl text-xs font-black hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-100">
-                      <i className="fa-solid fa-paste"></i> 粘贴中介反馈
+                      <i className="fa-solid fa-paste"></i> Paste Broker Feedback
                   </button>
                   <button onClick={onAddRow} className="bg-slate-900 text-white px-6 py-2 rounded-xl text-xs font-black hover:bg-slate-800 transition-all flex items-center gap-2 shadow-lg shadow-slate-100">
                       <i className="fa-solid fa-plus"></i> Add New Route
@@ -2553,7 +2553,7 @@ const App: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6 mb-6">
                   <div onClick={() => { setPasteTableError(''); setShowPasteTableModal(true); }} className="bg-white p-6 rounded-3xl shadow-sm border border-purple-200 flex items-center gap-4 cursor-pointer hover:border-purple-500 hover:shadow-lg transition-all">
                       <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-500"><i className="fa-solid fa-paste"></i></div>
-                      <div><p className="text-[10px] font-black uppercase text-slate-400">推荐 · 秒导入</p><h4 className="font-bold">粘贴取货表</h4></div>
+                      <div><p className="text-[10px] font-black uppercase text-slate-400">Recommended · Instant</p><h4 className="font-bold">Paste Dispatch Table</h4></div>
                   </div>
                   <div onClick={() => imageInputRef.current?.click()} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-purple-500 hover:shadow-lg transition-all">
                       <input type="file" ref={imageInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
