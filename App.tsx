@@ -71,6 +71,25 @@ const compareRouteNums = (a: string, b: string) => {
   return 0;
 };
 
+// Broker team → WhatsApp group invite link, baked in so every machine gets
+// the buttons without manual setup. UI/cloud edits override these; empty
+// saved values fall back to the defaults.
+const DEFAULT_TEAM_CONTACTS: Record<string, string> = {
+  Chris: 'https://chat.whatsapp.com/D6dTisW7Y9u9uEqWb7icT8?s=cl&p=i&ilr=4',
+  Kaneza: 'https://chat.whatsapp.com/DAlSnTKZxV6GLu9xCAVdla?s=cl&p=i&ilr=4',
+  Alawi: 'https://chat.whatsapp.com/IcVd9F525552sweiMSHUSH?s=cl&p=i&ilr=4',
+  Parfait: 'https://chat.whatsapp.com/IxDlMJQwU9GKzluNRRppNi?s=cl&p=i&ilr=4',
+  // Alain: 群链接暂缺，拿到后补上或在 Drivers 页填写
+};
+
+const withDefaultContacts = (saved?: Record<string, string> | null): Record<string, string> => {
+  const out = { ...DEFAULT_TEAM_CONTACTS };
+  for (const [k, v] of Object.entries(saved || {})) {
+    if (v && v.trim()) out[k] = v;
+  }
+  return out;
+};
+
 const getAgencyColor = (group: string) => {
   switch (group) {
     case 'Kaneza': return 'bg-rose-100 text-rose-900 border-rose-200';
@@ -1752,7 +1771,8 @@ const App: React.FC = () => {
   const [rosterDirty, setRosterDirty] = useState(() => localStorage.getItem('yow_roster_dirty') === '1');
   // Broker team → WhatsApp group invite link
   const [teamContacts, setTeamContacts] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem('yow_team_contacts') || '{}'); } catch { return {}; }
+    try { return withDefaultContacts(JSON.parse(localStorage.getItem('yow_team_contacts') || '{}')); }
+    catch { return { ...DEFAULT_TEAM_CONTACTS }; }
   });
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
@@ -1902,7 +1922,7 @@ const App: React.FC = () => {
           const result = await loadRoster();
           if (result) {
             applyCloudRoster(result.data.registry, result.data.deletedDriverIds || []);
-            if (result.data.teamContacts) setTeamContacts(result.data.teamContacts);
+            if (result.data.teamContacts) setTeamContacts(withDefaultContacts(result.data.teamContacts));
           }
         } catch { /* offline or unconfigured — keep local roster */ }
       }
