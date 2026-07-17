@@ -664,21 +664,40 @@ const FeedbackModal: React.FC<{
                     <div className="flex-1">
                       <div className="flex items-baseline gap-3 flex-wrap">
                         <span className="font-black text-orange-600 text-sm">{op.routeNum}</span>
-                        {route && (
-                          <span className="text-[10px] text-slate-400">
-                            现在：{route.driverId || '未分配'} · {route.orderVolume} 件{partRows.length > 0 && `（另有 ${partRows.length} 个切段）`}
-                          </span>
-                        )}
+                        {route?.routeLocation && <span className="text-[10px] font-bold text-slate-500">{route.routeLocation}</span>}
+                        {route && <span className="text-[10px] text-slate-400">共 {partsTotal} 件{partRows.length > 0 && `（含 ${partRows.length} 个切段）`}</span>}
                         {mismatch && <span className="text-[10px] font-black text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚠ 件数合计 {givenSum} ≠ 货量 {partsTotal}，套用时自动补差</span>}
                       </div>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {op.segments.map((seg, si) => (
-                          <span key={si} className="text-xs font-mono font-bold bg-white border border-slate-200 rounded-lg px-2.5 py-1">
-                            <span className="text-slate-400 mr-1">{seg.partIdx === 0 ? '主' : `.${seg.partIdx}`}</span>
-                            {seg.driverId}{seg.volume !== null ? ` × ${seg.volume}` : ' × 不变/剩余'}
-                          </span>
-                        ))}
+                      <div className="space-y-1.5 mt-2">
+                        {op.segments.map((seg, si) => {
+                          const target = seg.partIdx === 0
+                            ? route
+                            : partRows.find(r => r.routeNum === `${op.routeNum}.${seg.partIdx}`);
+                          const oldId = target?.driverId || '';
+                          const d = registry[seg.driverId];
+                          const isNewDriver = !d;
+                          const teamBadge = isNewDriver
+                            ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
+                            : getAgencyColor(d.group);
+                          return (
+                            <div key={si} className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-xl px-3 py-2">
+                              <span className="text-[9px] font-black text-slate-400 uppercase w-9">{seg.partIdx === 0 ? '主段' : `.${seg.partIdx} 段`}</span>
+                              {oldId && oldId !== seg.driverId && (
+                                <span className="text-[10px] text-slate-400"><s>{oldId}</s> →</span>
+                              )}
+                              <span className="font-black text-sm text-slate-900 font-mono">{seg.driverId}</span>
+                              <span className="text-xs font-bold text-slate-600">{d?.name || `Driver ${seg.driverId}`}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${teamBadge}`}>
+                                {isNewDriver ? '新司机' : d.group}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-500 ml-auto">{seg.volume !== null ? `× ${seg.volume} 件` : '× 不变/剩余'}</span>
+                            </div>
+                          );
+                        })}
                       </div>
+                      {route && (
+                        <p className="text-[10px] text-slate-400 mt-1.5">改前：{route.driverId || '未分配'}{registry[route.driverId || '']?.name ? ` ${registry[route.driverId!].name}` : ''} · 主段 {route.orderVolume} 件</p>
+                      )}
                     </div>
                   </label>
                 );
