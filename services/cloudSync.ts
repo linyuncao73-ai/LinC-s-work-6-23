@@ -196,10 +196,12 @@ export async function saveRoster(payload: RosterPayload): Promise<void> {
 
 const PENDING_ID = 'yow-pending';
 
-export async function savePending(pending: DriverRegistry): Promise<void> {
+export async function savePending(pending: DriverRegistry, deletedIds: string[] = []): Promise<void> {
   const { url, key } = getConfig();
   const passcode = getTeamPasscode();
-  const payload = { pending, savedAt: new Date().toISOString() };
+  // "deleted" are tombstones: temp drivers removed on one machine must be
+  // removed everywhere, or another machine's copy re-uploads them forever.
+  const payload = { pending, deleted: deletedIds, savedAt: new Date().toISOString() };
   const body = passcode ? await encryptJson(payload, passcode) : payload;
   const res = await fetch(`${url}/rest/v1/dispatch_snapshots`, {
     method: 'POST',
@@ -214,7 +216,7 @@ export async function savePending(pending: DriverRegistry): Promise<void> {
   if (!res.ok) throw new Error(`临时司机同步失败（HTTP ${res.status}）`);
 }
 
-export async function loadPending(): Promise<DriverRegistry | null> {
+export async function loadPending(): Promise<{ pending: DriverRegistry; deleted: string[] } | null> {
   const { url, key } = getConfig();
   const res = await fetch(
     `${url}/rest/v1/dispatch_snapshots?id=eq.${PENDING_ID}&select=data`,
@@ -230,7 +232,10 @@ export async function loadPending(): Promise<DriverRegistry | null> {
     data = await decryptJson(data, passcode);
   }
   if (!data || typeof data.pending !== 'object') return null;
-  return data.pending as DriverRegistry;
+  return {
+    pending: data.pending as DriverRegistry,
+    deleted: Array.isArray(data.deleted) ? data.deleted.map(String) : [],
+  };
 }
 
 export async function loadRoster(): Promise<{ data: RosterPayload; updatedAt: string } | null> {

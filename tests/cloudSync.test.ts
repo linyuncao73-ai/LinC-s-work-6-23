@@ -144,11 +144,24 @@ describe('cloudSync', () => {
       return { ok: true, json: async () => [{ data: savedBody.data }] };
     });
 
-    await savePending({ '12588': { name: 'Kaneza Team', group: 'Kaneza', temp: true } });
+    await savePending({ '12588': { name: 'Kaneza Team', group: 'Kaneza', temp: true } }, ['118925']);
     expect(savedBody.id).toBe('yow-pending');
+    expect(savedBody.data.deleted).toEqual(['118925']);
 
-    const pending = await loadPending();
-    expect(pending?.['12588'].group).toBe('Kaneza');
+    const row = await loadPending();
+    expect(row?.pending['12588'].group).toBe('Kaneza');
+    expect(row?.deleted).toEqual(['118925']);
+  });
+
+  it('loadPending tolerates old rows without a deleted field', async () => {
+    const { loadPending } = await import('../services/cloudSync');
+    (globalThis as any).fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => [{ data: { pending: { '12580': { name: 'Kaneza Team', group: 'Kaneza', temp: true } }, savedAt: 'x' } }],
+    }));
+    const row = await loadPending();
+    expect(row?.pending['12580'].name).toBe('Kaneza Team');
+    expect(row?.deleted).toEqual([]);
   });
 
   it('loadRoster returns null instead of throwing when unreachable', async () => {

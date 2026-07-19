@@ -1791,6 +1791,11 @@ const App: React.FC = () => {
     catch { return { ...DEFAULT_TEAM_CONTACTS }; }
   });
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  // Deleted temp-driver tombstones: synced through the pending row so a
+  // wrong ID removed on one machine stays removed everywhere.
+  const [tempTombstones, setTempTombstones] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('yow_temp_deleted') || '[]'); } catch { return []; }
+  });
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
     const saved = localStorage.getItem('yow_dispatch_registry');
     let tombstones: string[] = [];
@@ -1880,6 +1885,7 @@ const App: React.FC = () => {
   useEffect(() => { localStorage.setItem('yow_dispatch_overrides', JSON.stringify(ebinderManualOverrides)); }, [ebinderManualOverrides]);
   useEffect(() => { localStorage.setItem('yow_dispatch_deleted', JSON.stringify(deletedDriverIds)); }, [deletedDriverIds]);
   useEffect(() => { localStorage.setItem('yow_team_contacts', JSON.stringify(teamContacts)); }, [teamContacts]);
+  useEffect(() => { localStorage.setItem('yow_temp_deleted', JSON.stringify(tempTombstones)); }, [tempTombstones]);
   useEffect(() => {
     if (ebinderStatus?.type !== 'success') return;
     const t = setTimeout(() => setEbinderStatus(null), 5000);
@@ -1943,12 +1949,22 @@ const App: React.FC = () => {
         } catch { /* offline or unconfigured — keep local roster */ }
       }
       try {
-        const pending = await loadPending();
-        if (pending) {
+        const pendingRow = await loadPending();
+        if (pendingRow) {
+          // Union of local + cloud tombstones wins over any pending entry
+          let localDead: string[] = [];
+          try { localDead = JSON.parse(localStorage.getItem('yow_temp_deleted') || '[]'); } catch { /* none */ }
+          const dead = new Set([...localDead, ...pendingRow.deleted]);
+          if (pendingRow.deleted.length > 0) {
+            setTempTombstones(prev => [...new Set([...prev, ...pendingRow.deleted])]);
+          }
           setRegistry(prev => {
             const merged = { ...prev };
-            for (const [id, d] of Object.entries(pending)) {
-              if (!merged[id]) merged[id] = { ...d, temp: true };
+            for (const id of dead) {
+              if (merged[id]?.temp) delete merged[id];
+            }
+            for (const [id, d] of Object.entries(pendingRow.pending)) {
+              if (!merged[id] && !dead.has(id)) merged[id] = { ...d, temp: true };
             }
             return merged;
           });
@@ -1963,7 +1979,7 @@ const App: React.FC = () => {
   const lastPendingSyncRef = useRef<string | null>(null);
   useEffect(() => {
     const temp = partitionRegistry(registry).temp;
-    const json = JSON.stringify(temp);
+    const json = JSON.stringify({ temp, tempTombstones });
     if (lastPendingSyncRef.current === null) {
       // Skip the initial render — only push actual changes
       lastPendingSyncRef.current = json;
@@ -1971,9 +1987,9 @@ const App: React.FC = () => {
     }
     if (json === lastPendingSyncRef.current) return;
     lastPendingSyncRef.current = json;
-    const t = setTimeout(() => { savePending(temp).catch(() => { /* offline — next change retries */ }); }, 1000);
+    const t = setTimeout(() => { savePending(temp, tempTombstones).catch(() => { /* offline — next change retries */ }); }, 1000);
     return () => clearTimeout(t);
-  }, [registry]);
+  }, [registry, tempTombstones]);
 
   const handleApproveTemp = (id: string) => {
     setRegistry(prev => {
@@ -1998,6 +2014,9 @@ const App: React.FC = () => {
 
   const handleDeleteTemp = (id: string) => {
     setRegistry(prev => { const next = { ...prev }; delete next[id]; return next; });
+    // Tombstone syncs to the cloud so other machines delete it too instead
+    // of re-uploading their stale copy.
+    setTempTombstones(prev => (prev.includes(id) ? prev : [...prev, id]));
   };
 
   const handleSetTeamContact = (team: string, link: string) => {
@@ -2049,6 +2068,8 @@ const App: React.FC = () => {
           additions[u.id] = { name: `${u.group} Team`, group: u.group, temp: true };
         }
         effectiveRegistry = { ...registry, ...additions };
+        // A deliberately re-added ID must escape its old tombstone
+        setTempTombstones(prev => prev.filter(x => !unknowns.some(u => u.id === x)));
         setRegistry(effectiveRegistry);
         setDeletedDriverIds(prev => prev.filter(id => !additions[id]));
         addedNote = ` · ${unknowns.length} 个新司机号已登记为临时司机（Drivers 页可批准转正）`;
@@ -2306,6 +2327,7 @@ const App: React.FC = () => {
       if (window.confirm(`司机号 ${secondDriverId} 不在名册里。要登记为 ${team} 的临时司机吗？\n（拆分/改派列表里都能选到；在 Drivers 页可批准转正为永久司机）`)) {
         setRegistry(prev => ({ ...prev, [secondDriverId]: { name: `${team} Team`, group: team, temp: true } }));
         setDeletedDriverIds(prev => prev.filter(x => x !== secondDriverId));
+        setTempTombstones(prev => prev.filter(x => x !== secondDriverId));
       }
     }
     const d = secondDriverId ? registry[secondDriverId] : null;
