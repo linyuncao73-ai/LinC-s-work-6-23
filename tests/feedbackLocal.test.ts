@@ -149,6 +149,45 @@ Tomorrow's routes, thanks`;
     expect(byRoute['33050-3-3']).toEqual([{ driverId: '15172', volume: 188, partIdx: 0 }]);
   });
 
+  it('Alawi lazy split: same route number twice = base + first cut', () => {
+    // The broker split a route into two but labeled BOTH halves "33018-1"
+    // instead of "33018-1" + "33018-1.1". Repeated same-route mentions must
+    // fold into sequential split segments.
+    const candidates = [mk('33018-2-1', 300, 'Alawi'), mk('33020-2-1', 300, 'Alawi'), mk('33050-3-3', 300, 'Alawi'), mk('33055-4-2', 300, 'Alawi')];
+    const text = `*ALAWI* | 07/21/2026 | OSUB-202607192026
+
+📍 *8218*
+• 15171 @ 06:00 AM (#33018-1) [Orleans E] [100]
+• 15173 @ 06:00 AM (#33018-1) [Orleans E] [97]
+
+📍 *8220*
+• 15168 @ 06:00 AM (#33020-1) [Aylmer E] [99]
+• ⁠15166 @ 06:00 AM (#33020-1) [Aylmer E] [100]
+
+📍 *8250*
+• 15172 @ 06:00 AM (#33050-3) [Calton Place] [124]
+
+📍 *8255*
+• 15165 @ 06:00 AM (#33055-2) [Perth] [141]
+
+*Sum:* 4 Routes / 661 items
+
+Tomorrow's routes, thanks`;
+    const ops = parseFeedbackTextLocal(text, candidates);
+    const byRoute = Object.fromEntries(ops.map(o => [o.routeNum, o.segments]));
+
+    expect(byRoute['33018-2-1']).toEqual([
+      { driverId: '15171', volume: 100, partIdx: 0 },
+      { driverId: '15173', volume: 97, partIdx: 1 },
+    ]);
+    expect(byRoute['33020-2-1']).toEqual([
+      { driverId: '15168', volume: 99, partIdx: 0 },
+      { driverId: '15166', volume: 100, partIdx: 1 },
+    ]);
+    expect(byRoute['33050-3-3']).toEqual([{ driverId: '15172', volume: 124, partIdx: 0 }]);
+    expect(byRoute['33055-4-2']).toEqual([{ driverId: '15165', volume: 141, partIdx: 0 }]);
+  });
+
   it('returns [] for unmatched text so the AI fallback kicks in', () => {
     expect(parseFeedbackTextLocal('明天正常，都可以', [mk('33029-3-1')])).toEqual([]);
     expect(parseFeedbackTextLocal('', [mk('33029-3-1')])).toEqual([]);
