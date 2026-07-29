@@ -26,7 +26,7 @@ export const AGENCIES = ['Alain', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
 
 // Drivers who left the company: purged from saved registries and hidden
 // from the availability panel even if old browser data still contains them.
-export const REMOVED_DRIVER_IDS = ['2218', '26133', '6087'];
+export const REMOVED_DRIVER_IDS = ['2218', '26133', '6087', '13951'];
 
 export interface BatchInfo {
   date: string;
@@ -264,7 +264,6 @@ export const DRIVER_MAX_CAPACITIES: Record<string, number> = {
   '19492': 300,
   '4574':  300,
   '3261':  280,
-  '13951': 300,
   '13454': 300,
   '5528':  230,
   '6725':  150,
@@ -292,7 +291,6 @@ function buildInitialRegistry(): DriverRegistry {
     '5528': { name: 'Ben', group: 'Company' },
     '6725': { name: 'Nabil', group: 'Company' },
     '13952': { name: 'Hamal', group: 'Company' },
-    '13951': { name: 'Wesam', group: 'Company' },
     '5267': { name: 'Julio', group: 'Company' },
     '2566': { name: 'Chong', group: 'Company' },
     '18843': { name: 'Saiki', group: 'Company' },
@@ -403,7 +401,7 @@ export const PLACEHOLDER_MAPPING: Record<string, string> = {
   
   // 33012 placeholders
   '33012-3-1': '3261',
-  '33012-3-2': '13951',
+  '33012-3-2': '6074',
   '33012-3-3': '13454',
 
   // 33014 placeholders
@@ -425,14 +423,14 @@ export const PLACEHOLDER_MAPPING: Record<string, string> = {
 
   // 33017 placeholders
   '33017-2-1': '12572',
-  '33017-2-2': '6074',
+  '33017-2-2': '19994',
   '33017-3-1': '12572',
   '33017-3-2': '19749',
-  '33017-3-3': '6074',
+  '33017-3-3': '19994',
   '33017-4-1': '12572', 
   '33017-4-2': '3261', 
-  '33017-4-3': '6074', 
-  '33017-4-4': '13951',
+  '33017-4-3': '19994',
+  '33017-4-4': '19994',
   
   // 33018 placeholders
   '33018-2-1': '15165',
