@@ -30,7 +30,7 @@
 | AI | `@google/genai`（Gemini），仅兜底 |
 | 云存储 | Supabase（Postgres + REST + 匿名 RLS），前端直连 |
 | Excel 解析 | `xlsx`（SheetJS） |
-| 测试 | Vitest（`npm test`，62 个用例） |
+| 测试 | Vitest（`npm test`，65 个用例） |
 | 部署 | GitHub Actions → gh-pages → GitHub Pages |
 
 依赖见 `package.json`。无 Redux/路由库——全局状态就是 `App.tsx` 里的一堆 `useState`；"页面"用一个 `view` 字符串切换，不是真正的路由。
@@ -174,7 +174,7 @@ Supabase 的 URL 和匿名 key 是硬编码的公开值（配合 RLS），不算
 ## docs/ 目录
 
 - **`docs/隐藏逻辑与业务规则.md`** — Auto-Assign 默认司机映射、WhatsApp 报告格式约定、日期/批次逻辑、拆线与 Hold 规则、名册优先级等"只有维护者知道"的约定。**接手必读。**
-- **`docs/维护操作指南.md`** — 常见维护操作：加司机、改路线配置、加司机字段、Gemini key 轮换、换 Supabase 项目、改团队口令等分步指南。
+- **`docs/维护操作指南.md`** — **第 0 节是给调度员/同事的每晚排班 SOP**（导入取货表→Auto-Assign→拆线→报告→反馈→回填保存，含 2026-08 改版后的两页粘贴导入）；之后是维护者改代码的分步指南：加司机、改路线配置、加司机字段、Gemini key 轮换、换 Supabase 项目、改团队口令。
 - **`docs/已知问题与技术债.md`** — 已知 bug、未完成功能、技术债，按优先级排序。
 
 ---
