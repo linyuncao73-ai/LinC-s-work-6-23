@@ -48,6 +48,78 @@ describe('parsePastedDispatchTable', () => {
     expect([...zones].sort()).toEqual(['33011', '33012', '33022', '33055']);
   });
 
+  // The newer dashboard paginates (10 rows/page) and prints "0" in the DSP ID
+  // column where the old one had a bare dash. Both pages get pasted into the
+  // same box, one after the other, so the page footer/header lands mid-text.
+  const PAGINATED = `Dispatch Planning
+
+Back to plans
+Plan Details - 20260815
+
+OSUB-202608142056
+Route Number\tDSP ID\tShipments\tScan#\tSplit Count\tDispatch Rule\tRoute Status\tReview Status\tAction
+33011\t0\t483\t
+8257\t2\t
+1-256(19492),257-373(32108),374-483(18943)
+Audited\tCompleted\t\t
+33022\t0\t1012\t
+8222\t4\t
+1-200(20059),201-321(19526),322-586(4111),587-861(7409),862-1012(12569)
+Audited\tCompleted\t\t
+33024\t0\t515\t
+8224\t2\t
+1-120(31507),121-254(19524),255-384(3262),385-515(20063)
+Audited\tCompleted\t\t
+Rows per page:
+
+10
+
+1-10 of 18
+Dispatch Planning
+
+Back to plans
+Plan Details - 20260815
+
+OSUB-202608142056
+Route Number\tDSP ID\tShipments\tScan#\tSplit Count\tDispatch Rule\tRoute Status\tReview Status\tAction
+33025\t0\t377\t
+8225\t2\t
+1-190(29804),191-290(27905),291-377(27905)
+Audited\tCompleted\t\t
+33055\t0\t502\t
+8255\t4\t
+1-130(20135),131-261(15172),262-409(19995),410-502(19015)
+Audited\tCompleted\t\t
+Rows per page:
+
+10
+
+11-18 of 18`;
+
+  it('reads the Shipments column when DSP ID prints 0 instead of a dash', () => {
+    const { batchInfo } = parsePastedDispatchTable(PAGINATED, registry);
+    // Taking the first number after the route would yield the DSP ID 0
+    expect(batchInfo.totalVolume).toBe(483 + 1012 + 515 + 377 + 502);
+    expect(batchInfo.batchId).toBe('OSUB-202608142056');
+  });
+
+  it('keeps both pasted pages, ignoring the pagination header/footer between them', () => {
+    const { routes } = parsePastedDispatchTable(PAGINATED, registry);
+    const zones = [...new Set(routes.map(r => r.routeNum.split('-')[0]))].sort();
+    // "1-10 of 18" / "11-18 of 18" must not register as rows or segments
+    expect(zones).toEqual(['33011', '33022', '33024', '33025', '33055']);
+    expect(routes).toHaveLength(3 + 5 + 4 + 3 + 4);
+
+    const first = routes.find(r => r.routeNum === '33011-1')!;
+    expect(first.orderVolume).toBe(256);
+    expect(first.scanId).toBe('8257');
+    expect(first.driverId).toBe('19492'); // already-submitted table carries real IDs
+
+    const last = routes.find(r => r.routeNum === '33055-4')!;
+    expect(last.orderVolume).toBe(502 - 410 + 1);
+    expect(last.scanId).toBe('8255');
+  });
+
   it('throws a helpful error when no route rows are present', () => {
     expect(() => parsePastedDispatchTable('随便一段文字', registry)).toThrow(/33xxx/);
   });

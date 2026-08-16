@@ -521,6 +521,9 @@ const PasteTableModal: React.FC<{
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
             在取货表网页上框选整个表格 → Ctrl+C 复制 → 粘贴到这里（不依赖 AI，瞬间导入）
           </p>
+          <p className="text-purple-500 text-[11px] font-bold mt-2">
+            表格分成两页时：先粘第一页，再把第二页接着粘在下面，一次导入即可（中间的页码、表头文字会自动忽略）。
+          </p>
         </div>
         <div className="p-7 flex-1 overflow-y-auto">
           <textarea

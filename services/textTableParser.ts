@@ -27,12 +27,16 @@ export function parsePastedDispatchTable(
     const routeNum = m[0];
     const rest = chunk.slice(routeNum.length);
 
-    // 货量: first standalone number after the route number (commas allowed).
-    // Skip bare dashes from the empty 团队 ID column.
-    const volMatch = rest.match(/(\d{1,3}(?:,\d{3})+|\d+)/);
-    const totalVolume = volMatch ? parseInt(volMatch[1].replace(/,/g, '')) : 0;
-
     const scanMatch = chunk.match(/\b(8\d{3})\b/);
+
+    // 货量 (Shipments) is the column right before 扫单号, so take the last
+    // standalone number ahead of it. Grabbing the *first* number instead
+    // breaks on the newer dashboard, whose 团队/DSP ID column prints "0"
+    // rather than the bare dash the old one used.
+    const beforeScan = scanMatch ? rest.slice(0, rest.indexOf(scanMatch[1])) : rest;
+    const nums = [...beforeScan.matchAll(/(\d{1,3}(?:,\d{3})+|\d+)/g)];
+    const volMatch = nums.length > 0 ? nums[nums.length - 1] : rest.match(/(\d{1,3}(?:,\d{3})+|\d+)/);
+    const totalVolume = volMatch ? parseInt(volMatch[1].replace(/,/g, '')) : 0;
     const segments = parseAllocationSegments(chunk);
 
     rows.push({
