@@ -1,0 +1,40 @@
+import{G as S,g as A,T as f}from"./geminiClient-68jIz8iT.js";import{g as R}from"./index-CaMlQeGj.js";function D(l){const u=l.match(/^(.*?)\.(\d+)$/);return u?{base:u[1],segIdx:parseInt(u[2])}:{base:l,segIdx:0}}function M(l,u){const t=l.split("-").filter(o=>o!=="");if(t.length<2)return null;const i=t[0],n=t[t.length-1];for(const o of u){if(o.routeNum===l)return o.routeNum;const s=o.routeNum.split("-"),d=s[0],p=s[s.length-1];if((d===i||i.length>=2&&d.endsWith(i))&&p===n){if(t.length>=3&&s.length>=3&&t[1]!==s[1])continue;return o.routeNum}}return null}const N=l=>l.replace(/\s+/g,"").replace(/\.+$/,"");function O(l){const u=l.replace(/[\u200B-\u200D\u2060\uFEFF]/g,"").replace(/^[•\-\*\s]+/,"").trim();if(!u||/^(sum|total|tomorrow|thanks|some changes|driver id\s*$)/i.test(u))return[];let t=u.match(/^Driver\s*ID\s*(\d{3,7})\s*[:：]\s*([\d\s\-.]+?)(?:\((\d+)\s*-\s*(\d+)\))?\s*$/i);if(t){const i=t[3]!==void 0?parseInt(t[4])-parseInt(t[3])+1:null;return[{driverId:t[1],routeToken:N(t[2]),volume:i}]}if(t=u.match(/^(\d{3,7})\s*@[^(]*\(#\s*([\d\-. ]+)\)(.*)$/),t){const i=[...(t[3]||"").matchAll(/\[(\d+)\]/g)],n=i.length>0?parseInt(i[i.length-1][1]):null;return[{driverId:t[1],routeToken:N(t[2]),volume:n}]}if(t=u.match(/^([\d\s\-.]+?)\s*[:：]\s*(.+)$/),t&&/^\d/.test(t[1])){const i=N(t[1]),n=t[2],o=[];for(const s of n.matchAll(/(\d{3,7})\s*(?:\(\s*(\d+)\s*\))?/g))o.push({driverId:s[1],routeToken:i,volume:s[2]!==void 0?parseInt(s[2]):null});return o}if(t=u.match(/^(\d{4,7})\s*-\s*(33[\d\-. ]+?)\.?\s*(?:(\d+)\s*pk?ge?s?)?\s*$/i),t)return[{driverId:t[1],routeToken:N(t[2]),volume:t[3]!==void 0?parseInt(t[3]):null}];if(t=u.match(/^(\d{3,7})\s+([\d\-. ]+?)(?:\s*[#＃]\s*(\d+)|\s+(\d+)\s*件)?\s*$/),t&&t[2].includes("-")){const i=t[3]!==void 0?parseInt(t[3]):t[4]!==void 0?parseInt(t[4]):null;return[{driverId:t[1],routeToken:N(t[2]),volume:i}]}return[]}function V(l,u){const t=new Map;let i=0;for(const o of l.split(/\r?\n/))for(const s of O(o)){const{base:d,segIdx:p}=D(s.routeToken),r=M(d,u);r&&(t.has(r)||t.set(r,[]),t.get(r).push({segIdx:p,order:i++,seg:{driverId:s.driverId,volume:s.volume}}))}const n=[];for(const[o,s]of t){s.sort((r,c)=>r.segIdx-c.segIdx||r.order-c.order);const d=s.map(r=>r.segIdx),p=new Set(d).size!==d.length;n.push({routeNum:o,segments:s.map((r,c)=>({...r.seg,partIdx:p?c:r.segIdx}))})}return n}async function F(l,u){const t=new S({apiKey:R()}),n=`
+    You are parsing a delivery broker's WhatsApp reply that assigns drivers to routes.
+
+    CURRENT ROUTE TABLE (the only valid targets — every assignment you output
+    MUST use one of these exact routeNum values as its base):
+    ${u.map(r=>`${r.routeNum} (current driver ${r.driverId||"none"}, ${r.orderVolume} parcels, team ${r.driverGroup})`).join(`
+`)}
+
+    THE BROKER'S REPLY:
+    ---
+    ${l}
+    ---
+
+    Produce assignments: for each BASE route mentioned, the ordered list of
+    {driverId, volume} segments the broker wants.
+
+    HOW TO READ THE REPLY (brokers all write differently):
+    - Route shorthand: "22-1" means the route in the table matching 33022-…-1
+      (e.g. "33022-4-1"). "29-2" matches 33029-…-2. "33020 - 2" (with spaces)
+      means 33020-…-2. Always resolve to an exact routeNum from the table.
+    - SUFFIX FOLDING: entries like "29-2 #50", "29-2.1 #120", "29-2.2 #36"
+      are ONE base route (33029-…-2) split into 3 ordered segments:
+      [{50}, {120}, {36}]. The ".1"/".2" suffixes are cut parts, not separate
+      table routes. Same for "33018-2" + "33018-2.1" etc.
+    - Volume notations (all mean parcel count): "(190)", "#120", "[147]",
+      "135pkges", "135 pkges", "(1 - 150)" = a range meaning 150 parcels.
+    - "A(190) to B(100)": two segments — driver A keeps 190, driver B takes 100.
+    - "Driver ID 19749: 33020 - 2 (1 - 150)": driver 19749, base 33020-…-2,
+      volume 150.
+    - "28715-33018-2. 135pkges": driver 28715 first, then route, then volume.
+    - Driver + route with NO volume: volume = null (whole line, or the
+      remainder of that base route).
+    - A line like "• 15165 @ 06:00 AM (#33018-1) [Orleans E] [147]": driver
+      15165, base route 33018-…-1, volume 147.
+    - Ignore greetings, team names, dates, "Sum:" lines, and anything that
+      isn't a driver-route assignment.
+
+    Output every base route mentioned exactly once, with its segments in the
+    order they appear in the reply.
+  `,o=await A(t,{contents:n,config:{responseMimeType:"application/json",temperature:0,responseSchema:{type:f.OBJECT,properties:{assignments:{type:f.ARRAY,items:{type:f.OBJECT,properties:{routeNum:{type:f.STRING,description:"Exact base routeNum from the table, e.g. '33029-3-2'"},segments:{type:f.ARRAY,items:{type:f.OBJECT,properties:{driverId:{type:f.STRING,description:"Numeric driver ID"},volume:{type:f.NUMBER,description:"Parcel count for this segment; omit if not stated"}},required:["driverId"]}}},required:["routeNum","segments"]}}},required:["assignments"]}}}),s=JSON.parse(o.text||"{}"),d=new Set(u.map(r=>r.routeNum));return(s.assignments||[]).map(r=>({routeNum:String(r.routeNum||"").trim(),segments:(Array.isArray(r.segments)?r.segments:[]).map((c,x)=>({driverId:String(c.driverId||"").replace(/\D/g,""),volume:typeof c.volume=="number"&&c.volume>0?Math.round(c.volume):null,partIdx:x})).filter(c=>c.driverId!=="")})).filter(r=>d.has(r.routeNum)&&r.segments.length>0)}function j(l,u,t){const i=new Map;for(const n of l){const o=u.find(s=>s.routeNum===n.routeNum);for(const s of n.segments){if(!s.driverId||t[s.driverId]||i.has(s.driverId))continue;const d=s.partIdx>0?u.find(p=>p.routeNum===`${n.routeNum}.${s.partIdx}`):void 0;i.set(s.driverId,(d==null?void 0:d.driverGroup)||(o==null?void 0:o.driverGroup)||"Unassigned")}}return[...i.entries()].map(([n,o])=>({id:n,group:o}))}function L(l,u,t){const i=[];let n=[...l];for(const o of u){const s=n.findIndex(e=>e.routeNum===o.routeNum);if(s===-1){i.push(`${o.routeNum}: 表格里找不到这条线，已跳过`);continue}const d=`${o.routeNum}.`,p=e=>e.routeNum.startsWith(d)&&/^\d+$/.test(e.routeNum.slice(d.length)),r=new Map;r.set(0,n[s]);for(const e of n)p(e)&&r.set(parseInt(e.routeNum.slice(d.length)),e);const c=r.get(0);n=n.filter(e=>e!==c&&!p(e));const x=Math.min(s,n.length),h=[...r.values()].reduce((e,a)=>e+(Number(a.orderVolume)||0),0),T=(e,a)=>{var v;const m=t[e],I=((v=r.get(a))==null?void 0:v.driverGroup)||c.driverGroup||"Unassigned";return{name:(m==null?void 0:m.name)||`Driver ${e}`,group:(m==null?void 0:m.group)||I}},$=[...o.segments].sort((e,a)=>e.partIdx-a.partIdx),w=$.some(e=>e.partIdx===0&&e.volume!==null),g=[];let b=null;for(const e of $){const a=T(e.driverId,e.partIdx),m=r.get(e.partIdx);m?r.set(e.partIdx,{...m,driverId:e.driverId,driverName:a.name,driver:a.name,driverGroup:a.group,...e.volume!==null?{orderVolume:e.volume}:{},capacityStatus:void 0,capacityExcess:0,isDriverOff:!1}):(r.set(e.partIdx,{...c,id:`fb-${c.id}-${e.partIdx}-${Date.now()}`,routeNum:`${o.routeNum}.${e.partIdx}`,parentId:c.id,isSplit:!0,driverId:e.driverId,driverName:a.name,driver:a.name,driverGroup:a.group,orderVolume:e.volume??0,capacityStatus:void 0,capacityExcess:0,isDriverOff:!1}),e.volume===null&&g.push(e.partIdx)),e.volume!==null&&(b=e.partIdx)}if(r.size>1&&r.set(0,{...r.get(0),isSplit:!0}),g.length>0){const e=[...r.entries()].filter(([v])=>!g.includes(v)).reduce((v,[,y])=>v+(Number(y.orderVolume)||0),0),a=Math.max(0,h-e),m=Math.floor(a/g.length);let I=a-m*g.length;for(const v of g){const y=m+(I>0?1:0);I>0&&I--,r.set(v,{...r.get(v),orderVolume:y})}g.length>1&&i.push(`${o.routeNum}: 多段未写件数，已平分剩余量`)}const k=[...r.values()].reduce((e,a)=>e+(Number(a.orderVolume)||0),0);if(k!==h){const e=w?b??0:0,a=r.get(e),m=(Number(a.orderVolume)||0)+(h-k);m>0?(r.set(e,{...a,orderVolume:m}),i.push(`${o.routeNum}: 为保持货量 ${h}，${e===0?"主段":`第 ${e} 段`}已调整为 ${m}`)):i.push(`${o.routeNum}: 反馈件数合计与货量 ${h} 不符，按反馈原样套用（请检查）`)}const E=[...r.entries()].sort((e,a)=>e[0]-a[0]).map(([,e])=>e);n=[...n.slice(0,x),...E,...n.slice(x)]}return{routes:n,notes:i}}export{L as applyFeedbackOps,j as collectUnknownDrivers,F as parseBrokerFeedback,V as parseFeedbackTextLocal};
