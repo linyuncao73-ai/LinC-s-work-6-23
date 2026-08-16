@@ -95,7 +95,7 @@ create table dispatch_snapshots (
 | id | 内容 | 谁写 |
 |----|------|------|
 | `yow-main` | 当前排班快照（routes + batchInfo + registry + …） | 点 ☁↑ 保存 |
-| `yow-roster` | 已批准的正式名册（registry）+ 删除墓碑 + 中介群链接 teamContacts | Drivers 页点 Update（密码 1011） |
+| `yow-roster` | 已批准的正式名册（registry）+ 删除墓碑 + 中介群链接 teamContacts | Drivers 页点 Update（需密码，问维护者） |
 | `yow-pending` | 临时司机（temp）+ 删除墓碑 deleted | 自动同步（1 秒防抖，无需密码） |
 | `yow-day-YYYY-MM-DD` | 每日历史存档（一天一行，upsert） | 每次 ☁↑ 保存时自动存一份 |
 
