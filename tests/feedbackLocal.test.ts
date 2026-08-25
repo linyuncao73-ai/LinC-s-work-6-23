@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedbackTextLocal, CandidateRoute } from '../services/feedbackParser';
+import { parseFeedbackTextLocal, findTeamMismatches, CandidateRoute } from '../services/feedbackParser';
+import { DriverRegistry } from '../types';
 
 const mk = (routeNum: string, orderVolume = 300, driverGroup = 'Alain'): CandidateRoute =>
   ({ routeNum, orderVolume, driverId: '', driverGroup });
@@ -191,5 +192,51 @@ Tomorrow's routes, thanks`;
   it('returns [] for unmatched text so the AI fallback kicks in', () => {
     expect(parseFeedbackTextLocal('明天正常，都可以', [mk('33029-3-1')])).toEqual([]);
     expect(parseFeedbackTextLocal('', [mk('33029-3-1')])).toEqual([]);
+  });
+});
+
+describe('findTeamMismatches — 中介只改自己的线', () => {
+  const registry: DriverRegistry = {
+    '4574': { name: 'Sijiang', group: 'Company' },
+    '19995': { name: 'Alain Team', group: 'Alain' },
+    '19994': { name: 'Alain Team', group: 'Alain' },
+    '5003303': { name: 'Alain Team', group: 'Alain' },
+  };
+  // 33011 拆 2 份：-1 是 Alain 的，-2 是公司司机 Sijiang 的
+  const routes = [
+    { routeNum: '33011-2-1', driverId: '19995', driverGroup: 'Alain' },
+    { routeNum: '33011-2-2', driverId: '4574', driverGroup: 'Company' },
+    { routeNum: '33017-3-2', driverId: '19994', driverGroup: 'Alain' },
+  ];
+
+  it('flags a main-segment hit on a company route and points at the broker own line', () => {
+    // Alain 打成了 "19994 11-2"，实际想说 11-1
+    const ops = [{ routeNum: '33011-2-2', segments: [{ driverId: '19994', volume: null, partIdx: 0 }] }];
+    const bad = findTeamMismatches(ops, routes, registry);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].currentTeam).toBe('Company');
+    expect(bad[0].currentDriverId).toBe('4574');
+    expect(bad[0].suggestRouteNum).toBe('33011-2-1');
+  });
+
+  it('offers no suggestion when the reply already covers the right line', () => {
+    // 中介后面自己更正了：11-2 和 11-1 都在同一段反馈里
+    const ops = [
+      { routeNum: '33011-2-2', segments: [{ driverId: '19994', volume: null, partIdx: 0 }] },
+      { routeNum: '33011-2-1', segments: [{ driverId: '19994', volume: null, partIdx: 0 }] },
+    ];
+    const bad = findTeamMismatches(ops, routes, registry);
+    expect(bad.map(m => m.routeNum)).toEqual(['33011-2-2']);
+    expect(bad[0].suggestRouteNum).toBeNull();
+  });
+
+  it('leaves a ".n" cut on a company base alone — that is how cutting works', () => {
+    const ops = [{ routeNum: '33011-2-2', segments: [{ driverId: '5003303', volume: null, partIdx: 1 }] }];
+    expect(findTeamMismatches(ops, routes, registry)).toEqual([]);
+  });
+
+  it('leaves the broker own routes alone', () => {
+    const ops = [{ routeNum: '33017-3-2', segments: [{ driverId: '5003303', volume: null, partIdx: 0 }] }];
+    expect(findTeamMismatches(ops, routes, registry)).toEqual([]);
   });
 });

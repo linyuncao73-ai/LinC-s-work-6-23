@@ -382,3 +382,79 @@ export function applyFeedbackOps(
 
   return { routes: result, notes };
 }
+
+// ---------------------------------------------------------------------------
+// Typo guard: a broker only ever re-assigns its OWN routes. When a reply's
+// shorthand resolves to the main segment of somebody else's route (a company
+// driver's, or another broker's), the broker mistyped the sub-route number —
+// e.g. Alain writes "19994 11-2" meaning 11-1, and 11-2 happens to be a
+// company driver's line, which then gets taken away silently.
+//
+// A ".n" cut on somebody else's base is legitimate (that IS how a route gets
+// cut over to a broker), so only partIdx 0 counts as a mismatch.
+// ---------------------------------------------------------------------------
+
+export interface TeamMismatch {
+  opIndex: number;
+  routeNum: string;
+  currentDriverId: string;
+  currentTeam: string;
+  /** The one route of the replying broker in the same zone, when unambiguous. */
+  suggestRouteNum: string | null;
+}
+
+interface MismatchRoute { routeNum: string; driverId?: string; driverGroup?: string }
+
+/** Which broker sent this reply — the most common team among the drivers it names. */
+export function inferFeedbackTeam(ops: FeedbackOp[], registry: DriverRegistry): string {
+  const tally = new Map<string, number>();
+  for (const op of ops) {
+    for (const seg of op.segments) {
+      const group = registry[seg.driverId]?.group;
+      if (!group || group === 'Company' || group === 'Unassigned') continue;
+      tally.set(group, (tally.get(group) || 0) + 1);
+    }
+  }
+  let best = '', bestN = 0;
+  for (const [group, n] of tally) if (n > bestN) { best = group; bestN = n; }
+  return best;
+}
+
+export function findTeamMismatches(
+  ops: FeedbackOp[],
+  routes: MismatchRoute[],
+  registry: DriverRegistry
+): TeamMismatch[] {
+  const team = inferFeedbackTeam(ops, registry);
+  if (!team) return [];
+
+  const targeted = new Set(ops.map(o => o.routeNum));
+  const out: TeamMismatch[] = [];
+
+  ops.forEach((op, opIndex) => {
+    if (!op.segments.some(s => s.partIdx === 0)) return;
+    const route = routes.find(r => r.routeNum === op.routeNum);
+    const currentTeam = route?.driverGroup || '';
+    if (!route || !currentTeam || currentTeam === 'Unassigned' || currentTeam === team) return;
+
+    // Same zone, owned by the replying broker, and not already covered by
+    // another line of the same reply (if it is, the correction is already there).
+    const zone = op.routeNum.split('-')[0];
+    const mine = routes.filter(r =>
+      !r.routeNum.includes('.') &&
+      r.routeNum.split('-')[0] === zone &&
+      r.driverGroup === team &&
+      !targeted.has(r.routeNum)
+    );
+
+    out.push({
+      opIndex,
+      routeNum: op.routeNum,
+      currentDriverId: route.driverId || '',
+      currentTeam,
+      suggestRouteNum: mine.length === 1 ? mine[0].routeNum : null,
+    });
+  });
+
+  return out;
+}

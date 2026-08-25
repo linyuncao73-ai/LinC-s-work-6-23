@@ -560,6 +560,7 @@ const FeedbackModal: React.FC<{
   const [phase, setPhase] = useState<'input' | 'parsing' | 'preview'>('input');
   const [ops, setOps] = useState<FeedbackOp[]>([]);
   const [checked, setChecked] = useState<Record<number, boolean>>({});
+  const [mismatches, setMismatches] = useState<{ opIndex: number; routeNum: string; currentDriverId: string; currentTeam: string; suggestRouteNum: string | null }[]>([]);
   const [addUnknown, setAddUnknown] = useState(true);
   const [error, setError] = useState('');
 
@@ -596,8 +597,15 @@ const FeedbackModal: React.FC<{
         setPhase('input');
         return;
       }
+      const { findTeamMismatches } = await import('./services/feedbackParser');
+      // A broker only re-assigns its own routes, so a main-segment hit on
+      // somebody else's line is a mistyped sub-route number — leave those
+      // unchecked so they can't quietly take a company driver's route.
+      const bad = findTeamMismatches(parsed, routes, registry);
+      setMismatches(bad);
+      const badIdx = new Set(bad.map(m => m.opIndex));
       setOps(parsed);
-      setChecked(Object.fromEntries(parsed.map((_, i) => [i, true])));
+      setChecked(Object.fromEntries(parsed.map((_, i) => [i, !badIdx.has(i)])));
       setPhase('preview');
     } catch (err: any) {
       setError(err.message || '解析失败，请重试');
@@ -656,8 +664,12 @@ const FeedbackModal: React.FC<{
                 const hasNull = op.segments.some(s => s.volume === null);
                 const givenSum = op.segments.reduce((s, seg) => s + (seg.volume ?? 0), 0);
                 const mismatch = route && coversBase && !hasNull && givenSum !== partsTotal;
+                const wrongTeam = mismatches.find(m => m.opIndex === i);
                 return (
-                  <label key={i} className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${checked[i] ? 'border-orange-200 bg-orange-50/40' : 'border-slate-100 opacity-50'}`}>
+                  <label key={i} className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
+                    wrongTeam ? 'border-red-300 bg-red-50/60'
+                    : checked[i] ? 'border-orange-200 bg-orange-50/40' : 'border-slate-100 opacity-50'
+                  }`}>
                     <input
                       type="checkbox"
                       checked={!!checked[i]}
@@ -671,6 +683,32 @@ const FeedbackModal: React.FC<{
                         {route && <span className="text-[10px] text-slate-400">共 {partsTotal} 件{partRows.length > 0 && `（含 ${partRows.length} 个切段）`}</span>}
                         {mismatch && <span className="text-[10px] font-black text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚠ 件数合计 {givenSum} ≠ 货量 {partsTotal}，套用时自动补差</span>}
                       </div>
+                      {wrongTeam && (
+                        <div className="mt-2 p-2.5 rounded-xl bg-red-100 border border-red-200">
+                          <p className="text-[11px] font-black text-red-800">
+                            ⚠ 中介多半是打错了子线号 —— 已默认不勾选
+                          </p>
+                          <p className="text-[11px] text-red-700 mt-0.5">
+                            {op.routeNum} 现在是 <b>{wrongTeam.currentTeam}</b> 的 {wrongTeam.currentDriverId}
+                            {registry[wrongTeam.currentDriverId]?.name ? ` ${registry[wrongTeam.currentDriverId].name}` : ''}，
+                            不是这个中介的线。套用会把整条线从对方手里改派走。
+                          </p>
+                          {wrongTeam.suggestRouteNum && (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.preventDefault();
+                                setOps(prev => prev.map((o, idx) => idx === i ? { ...o, routeNum: wrongTeam.suggestRouteNum! } : o));
+                                setMismatches(prev => prev.filter(m => m.opIndex !== i));
+                                setChecked(prev => ({ ...prev, [i]: true }));
+                              }}
+                              className="mt-2 px-3 py-1.5 rounded-lg bg-red-600 text-white text-[11px] font-black hover:bg-red-700 transition-all"
+                            >
+                              改用 {wrongTeam.suggestRouteNum}（本区唯一属于该中介的线）
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <div className="space-y-1.5 mt-2">
                         {op.segments.map((seg, si) => {
                           const target = seg.partIdx === 0
