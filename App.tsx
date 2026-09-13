@@ -420,9 +420,12 @@ const AvailabilityPanel: React.FC<{
   // A driver who is only in the roster slots in beside the driver he follows
   // there, rather than being dumped after everyone else — a newly added or
   // returning driver then shows up next to his usual neighbour.
-  const rosterIds = Object.entries(registry)
-    .filter(([id, d]) => d.group === 'Company' && !removed.has(id))
-    .map(([id]) => id);
+  // Order by the roster in types.ts, not by the live registry: that one is
+  // keyed in saved-browser order, so a driver added later sits at the end of
+  // it and would be placed after the wrong neighbour. Drivers added from the
+  // Drivers screen aren't in the code roster and follow after it.
+  const rosterIds = [...new Set([...Object.keys(INITIAL_DRIVER_REGISTRY), ...Object.keys(registry)])]
+    .filter(id => registry[id]?.group === 'Company' && !removed.has(id));
   rosterIds.forEach((id, regIdx) => {
     if (ebIdSet.has(id)) return;
     const d = registry[id];
@@ -1869,8 +1872,14 @@ const App: React.FC = () => {
       // which are user-owned. maxCapacity always persists from saved.
       const merged: DriverRegistry = { ...parsed };
       for (const [id, def] of Object.entries(INITIAL_DRIVER_REGISTRY)) {
-        if (parsed[id]?.edited) continue;
-        merged[id] = { ...(parsed[id] || {}), ...def, maxCapacity: parsed[id]?.maxCapacity ?? (def as any).maxCapacity };
+        // A driver who has just been brought back takes the code entry whole:
+        // whatever a browser or the shared roster still holds for him is from
+        // before he left, right down to an out-of-date max capacity.
+        const revived = REVIVED_DRIVER_IDS.includes(id);
+        if (parsed[id]?.edited && !revived) continue;
+        merged[id] = revived
+          ? { ...def }
+          : { ...(parsed[id] || {}), ...def, maxCapacity: parsed[id]?.maxCapacity ?? (def as any).maxCapacity };
       }
       // Purge saved entries whose group no longer exists (e.g. removed broker teams)
       const validGroups = new Set(['Company', 'Unassigned', ...AGENCIES]);
@@ -1990,6 +1999,9 @@ const App: React.FC = () => {
     // and replacing the registry outright would drop him again. Deletions made
     // in the Drivers screen still win — they carry a tombstone in `deleted`.
     const merged: DriverRegistry = { ...INITIAL_DRIVER_REGISTRY, ...reg };
+    for (const id of REVIVED_DRIVER_IDS) {
+      if (INITIAL_DRIVER_REGISTRY[id]) merged[id] = { ...INITIAL_DRIVER_REGISTRY[id] };
+    }
     const cleaned: DriverRegistry = {};
     for (const [id, d] of Object.entries(merged)) {
       if (validGroups.has(d.group) && !REMOVED_DRIVER_IDS.includes(id) && !deleted.includes(id)) cleaned[id] = d;
