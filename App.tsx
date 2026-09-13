@@ -409,18 +409,30 @@ const AvailabilityPanel: React.FC<{
   const removed = new Set(REMOVED_DRIVER_IDS);
   const ebRows = (ebinderData?.drivers || []).filter(d => !removed.has(d.driverId));
   const ebIdSet = new Set(ebRows.map(d => d.driverId));
-  const companyDrivers: [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }][] = [
-    ...ebRows.map(d => {
-      const reg = registry[d.driverId];
-      return [d.driverId, {
-        name: reg?.name || d.driverName,
-        maxCapacity: reg?.maxCapacity ?? d.maxCapacity ?? undefined,
-      }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
-    }),
-    ...Object.entries(registry)
-      .filter(([id, d]) => d.group === 'Company' && !ebIdSet.has(id) && !removed.has(id))
-      .map(([id, d]) => [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: !!ebinderData }] as [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }]),
-  ];
+  type PanelDriver = [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
+  const companyDrivers: PanelDriver[] = ebRows.map(d => {
+    const reg = registry[d.driverId];
+    return [d.driverId, {
+      name: reg?.name || d.driverName,
+      maxCapacity: reg?.maxCapacity ?? d.maxCapacity ?? undefined,
+    }] as PanelDriver;
+  });
+  // A driver who is only in the roster slots in beside the driver he follows
+  // there, rather than being dumped after everyone else — a newly added or
+  // returning driver then shows up next to his usual neighbour.
+  const rosterIds = Object.entries(registry)
+    .filter(([id, d]) => d.group === 'Company' && !removed.has(id))
+    .map(([id]) => id);
+  rosterIds.forEach((id, regIdx) => {
+    if (ebIdSet.has(id)) return;
+    const d = registry[id];
+    let at = companyDrivers.length;
+    for (let k = regIdx - 1; k >= 0; k--) {
+      const pos = companyDrivers.findIndex(([lid]) => lid === rosterIds[k]);
+      if (pos !== -1) { at = pos + 1; break; }
+    }
+    companyDrivers.splice(at, 0, [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: !!ebinderData }] as PanelDriver);
+  });
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
   const parsedAgo = ebinderData ? Math.round((Date.now() - ebinderData.parsedAt) / 60000) : null;
 
@@ -443,11 +455,11 @@ const AvailabilityPanel: React.FC<{
             <button
               key={id}
               onClick={() => onManualToggle(id, !isOff)}
-              title={`Click to toggle · Max: ${maxCap ?? 'No limit'}`}
+              title={`Click to toggle · Max: ${maxCap ?? 'No limit'}${driver.notOnSheet ? ' · 不在 e-binder 表里' : ''}`}
               className={`flex flex-col items-center px-3 py-2 rounded-xl border text-left transition-all ${isOff ? 'bg-amber-50 border-amber-200 opacity-70' : 'bg-emerald-50 border-emerald-200 hover:border-emerald-400'}`}
             >
               <span className={`text-[10px] font-black ${isOff ? 'text-amber-700 line-through' : 'text-emerald-800'}`}>{id} {driver.name}</span>
-              <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{driver.notOnSheet ? 'Not on sheet' : isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
+              <span className={`text-[8px] ${isOff ? 'text-amber-500' : 'text-emerald-500'}`}>{isOff ? 'OFF' : `Max: ${maxCap ?? '∞'}`}</span>
             </button>
           );
         })}
