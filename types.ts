@@ -291,27 +291,30 @@ export const DRIVER_MAX_CAPACITIES: Record<string, number> = {
 
 function buildInitialRegistry(): DriverRegistry {
   const base: DriverRegistry = {
-    // Company / Individual
+    // Company / Individual — kept in the same order as the e-binder sheet,
+    // because the availability panel is read down this list.
     '19492': { name: 'Fath', group: 'Company' },
     '4574': { name: 'Sijiang', group: 'Company' },
-    '12699': { name: 'Shebani', group: 'Company' },
+    '3261': { name: 'Sam', group: 'Company' },
+    '6074': { name: 'Yousouf', group: 'Company' },
+    '13454': { name: 'Tajouri', group: 'Company' },
     '5528': { name: 'Ben', group: 'Company' },
     '6725': { name: 'Nabil', group: 'Company' },
     '13952': { name: 'Hamal', group: 'Company' },
+    '12699': { name: 'Shebani', group: 'Company' },
+    '13456': { name: 'Ammar', group: 'Company' },
+    '12572': { name: 'Nada', group: 'Company' },
     '5267': { name: 'Julio', group: 'Company' },
+    '18844': { name: 'Ismail', group: 'Company' },
     '2566': { name: 'Chong', group: 'Company' },
     '18843': { name: 'Saiki', group: 'Company' },
     '16864': { name: 'Pio', group: 'Company' },
     '6752': { name: 'Liban', group: 'Company' },
     '5847': { name: 'Amin Abdi', group: 'Company' },
     '2218': { name: 'Abdikader', group: 'Company' },
+    '3978': { name: 'Saleh', group: 'Company' },
     '4030': { name: 'Hadi', group: 'Company' },
     '13955': { name: 'Barkhad', group: 'Company' },
-    '3261': { name: 'Sam', group: 'Company' },
-    '3978': { name: 'Saleh', group: 'Company' },
-    '18844': { name: 'Ismail', group: 'Company' },
-    '6074': { name: 'Yousouf', group: 'Company' },
-    '13454': { name: 'Tajouri', group: 'Company' },
   // Alain
   '18944': { name: 'Alain Team', group: 'Alain' },
   '19015': { name: 'Alain Team', group: 'Alain' },
@@ -328,9 +331,6 @@ function buildInitialRegistry(): DriverRegistry {
   '18940': { name: 'Alain Team', group: 'Alain' },
   '32108': { name: 'Alain Team', group: 'Alain' },
   '18943': { name: 'Alain Team', group: 'Alain' },
-  // Former Ammar brokers, now company drivers
-  '13456': { name: 'Ammar', group: 'Company' },
-  '12572': { name: 'Nada', group: 'Company' },
   // Alawi
   '15170': { name: 'Alawi Team', group: 'Alawi' },
   '15171': { name: 'Alawi Team', group: 'Alawi' },

@@ -404,38 +404,30 @@ const AvailabilityPanel: React.FC<{
   onManualToggle: (driverId: string, setOff: boolean) => void;
   onClose: () => void;
 }> = ({ ebinderData, offDriverIds, registry, batchDate, onManualToggle, onClose }) => {
-  // With e-binder data: sheet row order first, then registry-only company drivers.
-  // Without: all company drivers from the registry.
   const removed = new Set(REMOVED_DRIVER_IDS);
   const ebRows = (ebinderData?.drivers || []).filter(d => !removed.has(d.driverId));
-  const ebIdSet = new Set(ebRows.map(d => d.driverId));
   type PanelDriver = [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
-  const companyDrivers: PanelDriver[] = ebRows.map(d => {
-    const reg = registry[d.driverId];
-    return [d.driverId, {
-      name: reg?.name || d.driverName,
-      maxCapacity: reg?.maxCapacity ?? d.maxCapacity ?? undefined,
-    }] as PanelDriver;
-  });
-  // A driver who is only in the roster slots in beside the driver he follows
-  // there, rather than being dumped after everyone else — a newly added or
-  // returning driver then shows up next to his usual neighbour.
-  // Order by the roster in types.ts, not by the live registry: that one is
-  // keyed in saved-browser order, so a driver added later sits at the end of
-  // it and would be placed after the wrong neighbour. Drivers added from the
-  // Drivers screen aren't in the code roster and follow after it.
+  // The roster in types.ts sets the order, and it is kept in e-binder order.
+  // The parsed sheet itself is not: it can be weeks old and miss drivers who
+  // joined or came back since, so ordering by it stranded them at the end. It
+  // now only fills in a name or capacity for someone the roster doesn't have.
+  const ebById = new Map(ebRows.map(d => [d.driverId, d]));
   const rosterIds = [...new Set([...Object.keys(INITIAL_DRIVER_REGISTRY), ...Object.keys(registry)])]
     .filter(id => registry[id]?.group === 'Company' && !removed.has(id));
-  rosterIds.forEach((id, regIdx) => {
-    if (ebIdSet.has(id)) return;
+  const companyDrivers: PanelDriver[] = rosterIds.map(id => {
     const d = registry[id];
-    let at = companyDrivers.length;
-    for (let k = regIdx - 1; k >= 0; k--) {
-      const pos = companyDrivers.findIndex(([lid]) => lid === rosterIds[k]);
-      if (pos !== -1) { at = pos + 1; break; }
-    }
-    companyDrivers.splice(at, 0, [id, { name: d.name, maxCapacity: d.maxCapacity, notOnSheet: !!ebinderData }] as PanelDriver);
+    const eb = ebById.get(id);
+    return [id, {
+      name: d.name || eb?.driverName || id,
+      maxCapacity: d.maxCapacity ?? eb?.maxCapacity ?? undefined,
+      notOnSheet: !!ebinderData && !eb,
+    }] as PanelDriver;
   });
+  // Anyone on the sheet the roster has never heard of still shows, after it.
+  for (const d of ebRows) {
+    if (registry[d.driverId] || removed.has(d.driverId)) continue;
+    companyDrivers.push([d.driverId, { name: d.driverName, maxCapacity: d.maxCapacity ?? undefined }] as PanelDriver);
+  }
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
   const parsedAgo = ebinderData ? Math.round((Date.now() - ebinderData.parsedAt) / 60000) : null;
 
