@@ -236,6 +236,40 @@ export const ZONE_NAMES: Record<string, string> = {
   '33055-4': 'M-M-R-E',
 };
 
+/**
+ * Order the availability panel is read in: the e-binder sheet, top to bottom.
+ * This has to be an explicit list — driver ids are integer-like strings, so a
+ * plain object always walks them in numeric order no matter how the roster is
+ * written, which is why the panel used to come out sorted by driver id.
+ * The two part-timers sit at the end. Anyone missing here lands after the list.
+ */
+export const DRIVER_PANEL_ORDER: string[] = [
+  '19492', // Fath
+  '4574',  // Sijiang
+  '3261',  // Sam
+  '6074',  // Yousouf
+  '13454', // Tajouri
+  '5528',  // Ben
+  '6725',  // Nabil
+  '13952', // Hamal
+  '12699', // Shebani
+  '13456', // Ammar
+  '12572', // Nada
+  '5267',  // Julio
+  '18844', // Ismail
+  '2566',  // Chong
+  '18843', // Saiki
+  '16864', // Pio
+  '6752',  // Liban
+  '5847',  // Amin Abdi
+  '2218',  // Abdikader
+  '3978',  // Saleh
+  '4030',  // Hadi
+  '13955', // Barkhad
+  '12412', // Grim — part-time
+  '14214', // MO — part-time
+];
+
 export interface DriverRegistryEntry {
   name: string;
   group: string;

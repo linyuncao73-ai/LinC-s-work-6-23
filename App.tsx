@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { parseExcelFile } from './services/excelParser';
-import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, REVIVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, BROKER_MIN_CUT, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, REVIVED_DRIVER_IDS, DRIVER_PANEL_ORDER, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, BROKER_MIN_CUT, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, saveArchive, listArchives, loadArchive, ArchiveEntry, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
@@ -406,28 +406,33 @@ const AvailabilityPanel: React.FC<{
 }> = ({ ebinderData, offDriverIds, registry, batchDate, onManualToggle, onClose }) => {
   const removed = new Set(REMOVED_DRIVER_IDS);
   const ebRows = (ebinderData?.drivers || []).filter(d => !removed.has(d.driverId));
-  type PanelDriver = [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
-  // The roster in types.ts sets the order, and it is kept in e-binder order.
-  // The parsed sheet itself is not: it can be weeks old and miss drivers who
-  // joined or came back since, so ordering by it stranded them at the end. It
-  // now only fills in a name or capacity for someone the roster doesn't have.
   const ebById = new Map(ebRows.map(d => [d.driverId, d]));
-  const rosterIds = [...new Set([...Object.keys(INITIAL_DRIVER_REGISTRY), ...Object.keys(registry)])]
-    .filter(id => registry[id]?.group === 'Company' && !removed.has(id));
-  const companyDrivers: PanelDriver[] = rosterIds.map(id => {
-    const d = registry[id];
-    const eb = ebById.get(id);
-    return [id, {
-      name: d.name || eb?.driverName || id,
-      maxCapacity: d.maxCapacity ?? eb?.maxCapacity ?? undefined,
-      notOnSheet: !!ebinderData && !eb,
-    }] as PanelDriver;
-  });
-  // Anyone on the sheet the roster has never heard of still shows, after it.
-  for (const d of ebRows) {
-    if (registry[d.driverId] || removed.has(d.driverId)) continue;
-    companyDrivers.push([d.driverId, { name: d.driverName, maxCapacity: d.maxCapacity ?? undefined }] as PanelDriver);
-  }
+  type PanelDriver = [string, { name: string; maxCapacity?: number; notOnSheet?: boolean }];
+  // Laid out in DRIVER_PANEL_ORDER (the e-binder sheet, top to bottom). Neither
+  // the roster nor the registry can carry that order: driver ids are
+  // integer-like, so a plain object is always walked in numeric order. The
+  // parsed sheet can't carry it either — it is often weeks stale and misses
+  // whoever joined or came back since, and is read here only for a name or
+  // capacity the roster lacks. Anyone in neither list follows at the end.
+  const rank = (id: string) => {
+    const i = DRIVER_PANEL_ORDER.indexOf(id);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const companyDrivers: PanelDriver[] = [...new Set([
+    ...Object.keys(registry).filter(id => registry[id]?.group === 'Company'),
+    ...ebRows.map(d => d.driverId),
+  ])]
+    .filter(id => !removed.has(id))
+    .sort((a, b) => rank(a) - rank(b))
+    .map(id => {
+      const d = registry[id];
+      const eb = ebById.get(id);
+      return [id, {
+        name: d?.name || eb?.driverName || id,
+        maxCapacity: d?.maxCapacity ?? eb?.maxCapacity ?? undefined,
+        notOnSheet: !!ebinderData && !eb,
+      }] as PanelDriver;
+    });
   const offCount = companyDrivers.filter(([id]) => offDriverIds.has(id)).length;
   const parsedAgo = ebinderData ? Math.round((Date.now() - ebinderData.parsedAt) / 60000) : null;
 
