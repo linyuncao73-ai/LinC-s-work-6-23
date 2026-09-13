@@ -26,7 +26,13 @@ export const AGENCIES = ['Alain', 'Alawi', 'Kaneza', 'Parfait', 'Chris'];
 
 // Drivers who left the company: purged from saved registries and hidden
 // from the availability panel even if old browser data still contains them.
-export const REMOVED_DRIVER_IDS = ['2218', '26133', '6087', '13951'];
+export const REMOVED_DRIVER_IDS = ['26133', '6087', '13951'];
+
+// Drivers who left and have since come back. An old delete tombstone for them
+// can still be sitting in a browser or in the shared roster row, which would
+// hide them again the moment that data loads — so tombstones for these ids are
+// dropped on load. Keep an id here until the stale tombstones are gone.
+export const REVIVED_DRIVER_IDS = ['2218'];
 
 export interface BatchInfo {
   date: string;
@@ -297,6 +303,7 @@ function buildInitialRegistry(): DriverRegistry {
     '16864': { name: 'Pio', group: 'Company' },
     '6752': { name: 'Liban', group: 'Company' },
     '5847': { name: 'Amin Abdi', group: 'Company' },
+    '2218': { name: 'Abdikader', group: 'Company' },
     '4030': { name: 'Hadi', group: 'Company' },
     '13955': { name: 'Barkhad', group: 'Company' },
     '3261': { name: 'Sam', group: 'Company' },
@@ -466,7 +473,7 @@ export const PLACEHOLDER_MAPPING: Record<string, string> = {
   '33024-3-1': '2566', '33024-3-2': '2900', '33024-3-3': '2528',
   '33026-3-1': '2778', '33026-3-2': '18843', '33026-3-3': '16864',
   '33029-3-1': '18944', '33029-3-2': '19015', '33029-3-3': '19995',
-  '33030-3-1': '6752', '33030-3-2': '5847', '33030-3-3': '28704',
+  '33030-3-1': '6752', '33030-3-2': '5847', '33030-3-3': '2218',
   '33030-4-1': '6752', '33030-4-2': '5847', '33030-4-3': '18944', '33030-4-4': '27852',
   '33034-3-1': '3978', '33034-3-2': '4030', '33034-3-3': '13955',
   '33045-3-1': '4186', '33045-3-2': '2633', '33045-3-3': '3974',

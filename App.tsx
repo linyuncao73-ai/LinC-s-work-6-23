@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { parseExcelFile } from './services/excelParser';
-import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, BROKER_MIN_CUT, getOffDriverIds } from './types';
+import { RouteData, AgencyGroup, AGENCIES, REMOVED_DRIVER_IDS, REVIVED_DRIVER_IDS, BatchInfo, INITIAL_DRIVER_REGISTRY, DriverRegistry, partitionRegistry, PLACEHOLDER_MAPPING, ZONE_NAMES, SCAN_ID_MAP, ALLOWED_TIME_SLOTS, getDefaultTimeSlot, getOttawaTomorrowDateString, EbinderData, DRIVER_MAX_CAPACITIES, BROKER_MIN_CUT, getOffDriverIds } from './types';
 import { getStoredApiKey, setStoredApiKey } from './services/apiKey';
 import { saveSnapshot, loadSnapshot, fetchCloudUpdatedAt, saveRoster, loadRoster, savePending, loadPending, saveArchive, listArchives, loadArchive, ArchiveEntry, getTeamPasscode, setTeamPasscode, DispatchSnapshot } from './services/cloudSync';
 import type { FeedbackOp } from './services/feedbackParser';
@@ -1807,6 +1807,10 @@ const AgencyReport: React.FC<{ group: AgencyGroup, batchInfo: BatchInfo, groupLi
   );
 };
 
+/** Delete tombstones minus anyone who has been brought back onto the roster. */
+const liveTombstones = (ids: string[]): string[] =>
+  ids.filter(id => !REVIVED_DRIVER_IDS.includes(id));
+
 const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -1822,7 +1826,7 @@ const App: React.FC = () => {
   });
   const [view, setView] = useState<'main' | 'reports' | 'allocations' | 'print' | 'bookmarks' | 'drivers'>('main');
   const [deletedDriverIds, setDeletedDriverIds] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]'); } catch { return []; }
+    try { return liveTombstones(JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]')); } catch { return []; }
   });
   // True while this browser has roster edits not yet pushed to Supabase
   const [rosterDirty, setRosterDirty] = useState(() => localStorage.getItem('yow_roster_dirty') === '1');
@@ -1840,7 +1844,7 @@ const App: React.FC = () => {
   const [registry, setRegistry] = useState<DriverRegistry>(() => {
     const saved = localStorage.getItem('yow_dispatch_registry');
     let tombstones: string[] = [];
-    try { tombstones = JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]'); } catch { /* none */ }
+    try { tombstones = liveTombstones(JSON.parse(localStorage.getItem('yow_dispatch_deleted') || '[]')); } catch { /* none */ }
     if (!saved) {
       const initial = { ...INITIAL_DRIVER_REGISTRY };
       for (const id of [...REMOVED_DRIVER_IDS, ...tombstones]) delete initial[id];
@@ -1965,10 +1969,17 @@ const App: React.FC = () => {
     markRosterDirty(true);
   };
 
-  const applyCloudRoster = (reg: DriverRegistry, deleted: string[]) => {
+  const applyCloudRoster = (reg: DriverRegistry, deletedRaw: string[]) => {
+    const deleted = liveTombstones(deletedRaw);
     const validGroups = new Set(['Company', 'Unassigned', ...AGENCIES]);
+    // Code defaults are the base, the cloud row wins per driver. Without this
+    // a driver added in types.ts never survives startup: the roster row was
+    // pushed while he was still in REMOVED_DRIVER_IDS, so it doesn't have him,
+    // and replacing the registry outright would drop him again. Deletions made
+    // in the Drivers screen still win — they carry a tombstone in `deleted`.
+    const merged: DriverRegistry = { ...INITIAL_DRIVER_REGISTRY, ...reg };
     const cleaned: DriverRegistry = {};
-    for (const [id, d] of Object.entries(reg)) {
+    for (const [id, d] of Object.entries(merged)) {
       if (validGroups.has(d.group) && !REMOVED_DRIVER_IDS.includes(id) && !deleted.includes(id)) cleaned[id] = d;
     }
     // The cloud roster only holds approved drivers — keep local temp ones
