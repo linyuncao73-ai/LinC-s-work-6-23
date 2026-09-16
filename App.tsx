@@ -79,7 +79,7 @@ const DEFAULT_TEAM_CONTACTS: Record<string, string> = {
   Kaneza: 'https://chat.whatsapp.com/DAlSnTKZxV6GLu9xCAVdla?s=cl&p=i&ilr=4',
   Alawi: 'https://chat.whatsapp.com/IcVd9F525552sweiMSHUSH?s=cl&p=i&ilr=4',
   Parfait: 'https://chat.whatsapp.com/IxDlMJQwU9GKzluNRRppNi?s=cl&p=i&ilr=4',
-  // Alain: 群链接暂缺，拿到后补上或在 Drivers 页填写
+  Alain: 'https://chat.whatsapp.com/D3petkiPjMf4Hpar4JmF29',
 };
 
 const withDefaultContacts = (saved?: Record<string, string> | null): Record<string, string> => {
